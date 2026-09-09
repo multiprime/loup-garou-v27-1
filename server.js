@@ -78,40 +78,32 @@ function defaultDatabase() {
 }
 
 function loadDatabase() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      const db = defaultDatabase();
-
-      fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(db, null, 2)
-      );
-
-      return db;
+  const candidates = [DATA_FILE, `${DATA_FILE}.bak`];
+  for (const file of candidates) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const content = fs.readFileSync(file, "utf8");
+      if (!content.trim()) continue;
+      const database = JSON.parse(content);
+      if (!database || !Array.isArray(database.users)) continue;
+      const merged = { ...defaultDatabase(), ...database };
+      if (file !== DATA_FILE) {
+        console.warn("⚠️ data.json restauré depuis la sauvegarde .bak");
+        try { fs.copyFileSync(file, DATA_FILE); } catch (_) {}
+      }
+      return merged;
+    } catch (error) {
+      console.error(`Erreur chargement ${file} :`, error.message);
     }
-
-    const content =
-      fs.readFileSync(
-        DATA_FILE,
-        "utf8"
-      );
-
-    const database =
-      JSON.parse(content);
-
-    return {
-      ...defaultDatabase(),
-      ...database
-    };
-
-  } catch (error) {
-    console.error(
-      "Erreur chargement data.json :",
-      error
-    );
-
-    return defaultDatabase();
   }
+
+  const db = defaultDatabase();
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf8");
+  } catch (error) {
+    console.error("Impossible de créer data.json :", error.message);
+  }
+  return db;
 }
 
 let db = loadDatabase();
@@ -1275,6 +1267,28 @@ app.get("/api/profile/:pseudo", (req, res) => {
   }
 });
 
+
+/* =========================================
+   API : ÉTAT DU STOCKAGE
+   Permet de distinguer une vraie absence de compte
+   d'un problème de stockage/réseau.
+========================================= */
+app.get("/api/storage-status", (req, res) => {
+  try {
+    const stat = fs.existsSync(DATA_FILE) ? fs.statSync(DATA_FILE) : null;
+    res.json({
+      ok: true,
+      persistentPath: DATA_DIR,
+      dataFile: DATA_FILE,
+      writable: (() => { try { fs.accessSync(DATA_DIR, fs.constants.W_OK); return true; } catch (_) { return false; } })(),
+      dataFileExists: !!stat,
+      dataFileSize: stat ? stat.size : 0,
+      accounts: db.users.length
+    });
+  } catch (error) {
+    res.status(500).json({ ok:false, message:"État du stockage indisponible." });
+  }
+});
 
 /* =========================================
    API : CONNEXION

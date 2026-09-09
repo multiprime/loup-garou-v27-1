@@ -295,21 +295,23 @@ $("loginForm")?.addEventListener(
 async function refreshSavedAccount(pseudo) {
   try {
     const response = await fetch(
-      `/api/profile/${encodeURIComponent(pseudo)}`
+      `/api/profile/${encodeURIComponent(pseudo)}`,
+      { cache: "no-store" }
     );
     const data = await response.json().catch(()=>({}));
-    if (!response.ok || !data.user) {
-      // Le localStorage ne doit jamais être considéré comme le compte officiel.
-      // Si le serveur ne connaît plus le compte, on demande une vraie reconnexion.
-      currentUser = null;
-      localStorage.removeItem("lgv7_user");
-      socket.emit("userOffline");
-      $("menuScreen")?.classList.add("hidden");
-      $("authScreen")?.classList.remove("hidden");
-      showLogin();
-      if ($("authMessage")) {
-        $("authMessage").textContent = "❌ Compte non retrouvé sur le serveur. Reconnecte-toi.";
-      }
+
+    // Une coupure réseau NE DOIT JAMAIS être interprétée comme une suppression.
+    if (!response.ok && response.status >= 500) {
+      console.warn("Serveur indisponible pendant la restauration du compte.");
+      if ($("authMessage")) $("authMessage").textContent = "⚠️ Serveur indisponible. Ton compte n'a pas été supprimé.";
+      return false;
+    }
+
+    if (response.status === 404 || !data.user) {
+      // Le serveur confirme réellement que le pseudo n'existe pas.
+      // On ne détruit pas immédiatement le cache local : il peut s'agir d'un stockage Render réinitialisé.
+      if ($("authMessage")) $("authMessage").textContent = "⚠️ Le serveur ne retrouve pas ce compte. Aucune donnée locale n'a été supprimée. Vérifie le stockage du serveur.";
+      console.warn("Compte absent du serveur : cache local conservé.");
       return false;
     }
 
@@ -321,6 +323,7 @@ async function refreshSavedAccount(pseudo) {
     return true;
   } catch (error) {
     console.warn("Impossible de recharger le compte :", error);
+    if ($("authMessage")) $("authMessage").textContent = "⚠️ Connexion au serveur impossible. Ton compte n'a pas été supprimé.";
   }
   return false;
 }

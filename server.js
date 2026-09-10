@@ -9,6 +9,7 @@ const path = require("path");
 const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const { Server } = require("socket.io");
+const { Pool } = require("pg");
 
 
 /* =========================================
@@ -53,7 +54,8 @@ app.use(
 
 
 /* =========================================
-   BASE DE DONNÉES JSON
+   BASE DE DONNÉES — V25
+   PostgreSQL externe + fallback JSON local
 ========================================= */
 
 function defaultDatabase() {
@@ -77,7 +79,26 @@ function defaultDatabase() {
   };
 }
 
-function loadDatabase() {
+function mergeDatabase(database) {
+  const merged = { ...defaultDatabase(), ...(database || {}) };
+  merged.announcements = { ...defaultDatabase().announcements, ...(database?.announcements || {}) };
+  merged.globalBoosts = { ...defaultDatabase().globalBoosts, ...(database?.globalBoosts || {}) };
+  ["coins", "xp", "trophies"].forEach(type => {
+    merged.globalBoosts[type] = {
+      multiplier: Number(database?.globalBoosts?.[type]?.multiplier || 1),
+      until: Number(database?.globalBoosts?.[type]?.until || 0)
+    };
+  });
+  merged.users = Array.isArray(merged.users) ? merged.users : [];
+  merged.rooms = Array.isArray(merged.rooms) ? merged.rooms : [];
+  merged.friendships = Array.isArray(merged.friendships) ? merged.friendships : [];
+  merged.friendRequests = Array.isArray(merged.friendRequests) ? merged.friendRequests : [];
+  merged.messages = Array.isArray(merged.messages) ? merged.messages : [];
+  merged.notifications = Array.isArray(merged.notifications) ? merged.notifications : [];
+  return merged;
+}
+
+function loadLocalDatabase() {
   const candidates = [DATA_FILE, `${DATA_FILE}.bak`];
   for (const file of candidates) {
     try {
@@ -86,54 +107,105 @@ function loadDatabase() {
       if (!content.trim()) continue;
       const database = JSON.parse(content);
       if (!database || !Array.isArray(database.users)) continue;
-      const merged = { ...defaultDatabase(), ...database };
       if (file !== DATA_FILE) {
         console.warn("⚠️ data.json restauré depuis la sauvegarde .bak");
         try { fs.copyFileSync(file, DATA_FILE); } catch (_) {}
       }
-      return merged;
+      return mergeDatabase(database);
     } catch (error) {
       console.error(`Erreur chargement ${file} :`, error.message);
     }
   }
-
-  const db = defaultDatabase();
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf8");
-  } catch (error) {
-    console.error("Impossible de créer data.json :", error.message);
-  }
-  return db;
+  return mergeDatabase(defaultDatabase());
 }
 
-let db = loadDatabase();
-db.globalBoosts = db.globalBoosts || {};
-["coins","xp","trophies"].forEach(type => {
-  db.globalBoosts[type] = db.globalBoosts[type] || { multiplier: 1, until: 0 };
-  db.globalBoosts[type].multiplier = Number(db.globalBoosts[type].multiplier || 1);
-  db.globalBoosts[type].until = Number(db.globalBoosts[type].until || 0);
-});
-db.users.forEach(ensureUserState);
+let db = loadLocalDatabase();
+let externalDbReady = false;
+let externalDbPromise = null;
+let saveQueue = Promise.resolve();
+let pgPool = null;
+
+if (process.env.DATABASE_URL) {
+  pgPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+    max: Number(process.env.DATABASE_POOL_MAX || 5),
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000
+  });
+}
+
+function normalizeLoadedUsers() {
+  db.globalBoosts = db.globalBoosts || {};
+  ["coins","xp","trophies"].forEach(type => {
+    db.globalBoosts[type] = db.globalBoosts[type] || { multiplier: 1, until: 0 };
+    db.globalBoosts[type].multiplier = Number(db.globalBoosts[type].multiplier || 1);
+    db.globalBoosts[type].until = Number(db.globalBoosts[type].until || 0);
+  });
+  db.users.forEach(ensureUserState);
+}
+
+async function initializeExternalDatabase() {
+  if (!pgPool) {
+    normalizeLoadedUsers();
+    console.warn("⚠️ DATABASE_URL n'est pas défini : V25 utilise le stockage JSON local. Pour une vraie persistance externe, ajoutez DATABASE_URL dans Render.");
+    return;
+  }
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS loup_garou_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  const result = await pgPool.query("SELECT data FROM loup_garou_state WHERE id = 1");
+  if (result.rows.length) {
+    db = mergeDatabase(result.rows[0].data);
+    console.log("✅ Base PostgreSQL externe chargée.");
+  } else {
+    // Première installation : si un ancien data.json existe, on le migre automatiquement.
+    db = loadLocalDatabase();
+    await pgPool.query(
+      `INSERT INTO loup_garou_state (id, data) VALUES (1, $1::jsonb)`,
+      [JSON.stringify(db)]
+    );
+    console.log("✅ Base PostgreSQL créée et données locales migrées.");
+  }
+
+  normalizeLoadedUsers();
+  externalDbReady = true;
+}
 
 function saveDatabase() {
-  try {
-    const tempFile = `${DATA_FILE}.tmp`;
-    const json = JSON.stringify(db, null, 2);
-
-    // Écriture atomique : on évite de perdre data.json si le serveur
-    // s'arrête pendant une sauvegarde.
-    fs.writeFileSync(tempFile, json, "utf8");
-    fs.renameSync(tempFile, DATA_FILE);
-
-    // Petite copie de secours du compte/la base.
-    try {
-      fs.writeFileSync(`${DATA_FILE}.bak`, json, "utf8");
-    } catch (_) {}
-  } catch (error) {
-    console.error("Erreur sauvegarde :", error);
+  if (!externalDbReady || !pgPool) {
+    // Développement/local : conserver le fallback JSON.
+    if (!pgPool) {
+      try {
+        const tempFile = `${DATA_FILE}.tmp`;
+        const json = JSON.stringify(db, null, 2);
+        fs.writeFileSync(tempFile, json, "utf8");
+        fs.renameSync(tempFile, DATA_FILE);
+        try { fs.writeFileSync(`${DATA_FILE}.bak`, json, "utf8"); } catch (_) {}
+      } catch (error) {
+        console.error("Erreur sauvegarde locale :", error.message);
+      }
+    }
+    return;
   }
-}
 
+  // Une file d'écriture évite que plusieurs sauvegardes concurrentes se marchent dessus.
+  const snapshot = JSON.parse(JSON.stringify(db));
+  saveQueue = saveQueue
+    .then(() => pgPool.query(
+      `INSERT INTO loup_garou_state (id, data, updated_at)
+       VALUES (1, $1::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+      [JSON.stringify(snapshot)]
+    ))
+    .catch(error => console.error("❌ Erreur sauvegarde PostgreSQL :", error.message));
+}
 
 /* =========================================
    OUTILS
@@ -3566,11 +3638,36 @@ setInterval(
 
 setInterval(()=>{purgeExpiredNotifications();saveDatabase();},30000);
 
-server.listen(
-  PORT,
-  () => {
-    console.log(
-      `🐺 Loup-Garou V7 lancé sur le port ${PORT}`
-    );
+async function startServer() {
+  try {
+    await initializeExternalDatabase();
+    server.listen(PORT, () => {
+      console.log(`🐺 Loup-Garou V7 lancé sur le port ${PORT}`);
+      if (externalDbReady) console.log("💾 Persistance active : PostgreSQL externe");
+    });
+  } catch (error) {
+    console.error("❌ Impossible d'initialiser la base externe :", error.message);
+    console.error("Vérifiez DATABASE_URL / DATABASE_SSL dans Render.");
+    process.exit(1);
   }
-);
+}
+
+process.on("SIGTERM", async () => {
+  try {
+    await saveQueue;
+    if (pgPool) await pgPool.end();
+  } finally {
+    process.exit(0);
+  }
+});
+
+process.on("SIGINT", async () => {
+  try {
+    await saveQueue;
+    if (pgPool) await pgPool.end();
+  } finally {
+    process.exit(0);
+  }
+});
+
+startServer();

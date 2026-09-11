@@ -1229,3 +1229,8 @@ body.in-game .v19-game { max-width:1180px; min-height:calc(100vh - 20px); margin
 
 
 .admin-dashboard-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}.admin-stat{padding:16px;border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(10,12,25,.55);display:flex;flex-direction:column;gap:3px;text-align:center}.admin-stat b{font-size:24px}.admin-stat strong{font-size:24px}.admin-stat span{opacity:.72;font-size:13px}.admin-help{opacity:.78;margin-bottom:0}@media(max-width:800px){.admin-dashboard-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/* V26 - contrôle de l'événement Halloween */
+.admin-halloween-buttons{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;}
+.admin-halloween-card{border:1px solid rgba(255,145,0,.35);}

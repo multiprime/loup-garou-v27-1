@@ -971,11 +971,45 @@ function assignRolesForGame(players){
     : halloween
       ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Citrouille","Villageois"]
       : ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Villageois","Villageois"];
-  const assignments=new Map(),slots={}; rolePool.forEach(r=>slots[r]=(slots[r]||0)+1);
-  shuffle(players.slice()).forEach(player=>{const c=getEquippedClass(player),wanted=getClassRole(c?.id);if(!wanted||!slots[wanted])return;if(wanted==="Citrouille"&&Math.random()>.30)return;assignments.set(player.pseudo,wanted);slots[wanted]--;});
+  const assignments=new Map(),slots={};
+  rolePool.forEach(r=>slots[r]=(slots[r]||0)+1);
+  const pumpkinDenied=new Set();
+
+  // Les classes normales garantissent leur rôle si le rôle existe dans la partie.
+  // La classe Citrouille est différente : elle donne 30 % de chance d'obtenir ce rôle.
+  shuffle(players.slice()).forEach(player=>{
+    const c=getEquippedClass(player),wanted=getClassRole(c?.id);
+    if(!wanted||!slots[wanted])return;
+    if(wanted==="Citrouille"&&Math.random()>.30){
+      pumpkinDenied.add(player.pseudo);
+      return;
+    }
+    assignments.set(player.pseudo,wanted);
+    slots[wanted]--;
+  });
+
+  // Répartition des rôles restants en respectant le refus de la Citrouille.
   const free=shuffle(players.filter(p=>!assignments.has(p.pseudo)));
-  const remaining=shuffle(Object.entries(slots).flatMap(([r,n])=>Array(n).fill(r)));
-  free.forEach((p,i)=>assignments.set(p.pseudo,remaining[i]||"Villageois"));
+  const remaining=[];
+  Object.entries(slots).forEach(([role,n])=>{
+    for(let i=0;i<n;i++)remaining.push(role);
+  });
+  shuffle(remaining);
+  const used=new Set();
+  free.forEach(p=>{
+    let idx=remaining.findIndex(role=>!(role==="Citrouille"&&pumpkinDenied.has(p.pseudo)));
+    if(idx<0)idx=remaining.findIndex(role=>role!=="Citrouille");
+    if(idx<0)idx=remaining.length?0:-1;
+    if(idx>=0){
+      const role=remaining.splice(idx,1)[0];
+      assignments.set(p.pseudo,role);
+      used.add(role);
+    }
+  });
+
+  // Si personne n'a réussi le tirage 30 %, le slot Citrouille devient Villageois.
+  // Cela évite de donner involontairement la Citrouille à 100 % des parties Halloween.
+  players.forEach(p=>{if(!assignments.has(p.pseudo))assignments.set(p.pseudo,"Villageois");});
   return assignments;
 }
 function isWolfTeamRole(role){return role==="Loup-Garou"||role==="Citrouille";}
@@ -2091,7 +2125,12 @@ app.post("/api/admin/reward-all-now",(req,res)=>{
 
 
 app.get("/api/release",(req,res)=>res.json({v26Release:db.v26Release||{active:false,version:25,updatedAt:0}}));
-app.post("/api/admin/v26/update",(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});const release=releaseV26();res.json({message:"🚀 V26 mise à jour : Géant de pierre, correctifs et recherche de vrais joueurs activés.",release});});
+app.post("/api/admin/v26/update",(req,res)=>{
+  if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
+  if(isV26Released()) return res.status(409).json({message:"La V26 est déjà mise à jour.",release:db.v26Release});
+  const release=releaseV26();
+  res.json({message:"🚀 V26 mise à jour : Géant de pierre, correctifs et recherche de vrais joueurs activés.",release});
+});
 app.post("/api/admin/class-discount",(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});const pct=Number(req.body.percent||0);if(![0,10,25,50,75].includes(pct))return res.status(400).json({message:"Réduction invalide."});const discount=setClassDiscount(pct,Number(req.body.durationMinutes||10));res.json({message:pct?`🎟️ Réduction classes de ${pct}% activée.`:"🎟️ Réduction classes désactivée.",classDiscount:discount});});
 
 app.post("/api/admin/global-boost", (req,res)=>{

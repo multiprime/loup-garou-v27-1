@@ -72,6 +72,7 @@ function defaultDatabase() {
     bloodMoonProgress: {},
     bloodMoonManualUntil: 0,
     halloweenEvent: { active: false, week: 0, startedAt: 0, endsAt: 0 },
+    halloweenShopSeason: 0,
     v26Release: { active: false, version: 25, updatedAt: 0 },
     classDiscount: { percent: 0, until: 0 },
     globalBoosts: {
@@ -89,6 +90,7 @@ function mergeDatabase(database) {
   merged.halloweenEvent = { ...defaultDatabase().halloweenEvent, ...(database?.halloweenEvent || {}) };
   merged.v26Release = { ...defaultDatabase().v26Release, ...(database?.v26Release || {}) };
   merged.classDiscount = { ...defaultDatabase().classDiscount, ...(database?.classDiscount || {}) };
+  merged.halloweenShopSeason = Number(database?.halloweenShopSeason || 0);
   ["coins", "xp", "trophies"].forEach(type => {
     merged.globalBoosts[type] = {
       multiplier: Number(database?.globalBoosts?.[type]?.multiplier || 1),
@@ -666,9 +668,11 @@ function rewardDescription(reward = {}) {
   const coins = Number(reward.coins || 0);
   const xp = Number(reward.xp || 0);
   const trophies = Number(reward.trophies || 0);
+  const halloweenCandy = Math.max(0, Number(reward.halloweenCandy || 0));
   if (coins > 0) parts.push(`${coins} pièce${coins > 1 ? "s" : ""} 🪙`);
   if (xp > 0) parts.push(`${xp} XP ✨`);
   if (trophies > 0) parts.push(`${trophies} trophée${trophies > 1 ? "s" : ""} 🏆`);
+  if (halloweenCandy > 0) parts.push(`${halloweenCandy} bonbon${halloweenCandy > 1 ? "s" : ""} 🍬`);
   if (reward.classId) {
     const classe = CLASSES.find(c => c.id === reward.classId);
     if (classe) parts.push(`la classe ${classe.name} 🐺`);
@@ -697,6 +701,8 @@ function applyReward(
   const trophies =
     Number(reward.trophies || 0);
 
+  const halloweenCandy = Math.max(0, Number(reward.halloweenCandy || 0));
+
   user.coins =
     Number(user.coins || 0) +
     coins;
@@ -711,6 +717,8 @@ function applyReward(
       Number(user.trophies || 0) +
       trophies
     );
+
+  if (halloweenCandy > 0) user.halloweenCandy = Math.max(0, Number(user.halloweenCandy || 0) + halloweenCandy);
 
   if (reward.classId) {
     user.classes =
@@ -755,6 +763,7 @@ function ensureUserState(user) {
   user.boosts.double_coins_until = Number(user.boosts.double_coins_until || 0);
   user.boosts.double_xp_until = Number(user.boosts.double_xp_until || 0);
   user.boosts.double_trophies_until = Number(user.boosts.double_trophies_until || 0);
+  user.halloweenCandy = Math.max(0, Number(user.halloweenCandy || 0));
 }
 function getRankedSeasonKey(date=new Date()) {
   const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit"}).formatToParts(date);
@@ -1102,6 +1111,15 @@ function getGlobalBoostPayload() {
   return result;
 }
 
+const HALLOWEEN_SHOP_ITEMS = [
+  {id:"halloween_coins", name:"Sac de pièces hantées", price:100, description:"Échange 100 bonbons contre 250 pièces."},
+  {id:"halloween_xp", name:"Éclat d'expérience", price:150, description:"Échange 150 bonbons contre 500 XP."},
+  {id:"halloween_title", name:"Titre : Maître des citrouilles", price:300, description:"Titre Halloween permanent à équiper."},
+  {id:"halloween_trophy", name:"Trophée maudit", price:400, description:"Échange 400 bonbons contre 3 trophées."}
+];
+function halloweenSeasonKey(){ return Number(db.halloweenEvent?.week||0)>0 ? Number(db.halloweenEvent.week) : 0; }
+function awardHalloweenCandy(user, amount){ if(!user)return 0; const st=getHalloweenStatus(); if(!st.active || !isV26Released())return 0; const n=Math.max(0,Math.floor(Number(amount||0))); user.halloweenCandy=Math.max(0,Number(user.halloweenCandy||0)+n); return n; }
+
 function finishGame(room) {
   const game=room.game; if(!game || game.phase==="finished") return;
   game.phase="finished"; const blood=getBloodMoonStatus();
@@ -1126,6 +1144,8 @@ function finishGame(room) {
     trophies *= getActiveGlobalMultiplier("trophies");
 
     applyReward(user,{xp,coins,trophies});
+    const candyEarned = awardHalloweenCandy(user, won ? 25 : 10);
+    if(candyEarned) registerQuestStat(user,"halloweenCandy",candyEarned);
     user.gamesPlayed=Number(user.gamesPlayed||0)+1; registerQuestStat(user,"gamesPlayed",1);
     if(won){user.gamesWon=Number(user.gamesWon||0)+1;registerQuestStat(user,"gamesWon",1);if(blood.active)registerBloodQuest(user,"bloodWon",1);}
     if(game.ranked){registerQuestStat(user,"rankedPlayed",1);if(won){registerQuestStat(user,"rankedWon",1);user.rankedWins++;user.rankedPoints+=30;}else{user.rankedPoints=Math.max(0,user.rankedPoints-10);}user.rankedRank=getRankedRank(user.rankedPoints);}
@@ -1260,6 +1280,8 @@ app.post(
         xp: 0,
 
         coins: 50,
+
+        halloweenCandy: 0,
 
         trophies: 0,
 
@@ -1944,6 +1966,8 @@ app.post(
           Number(trophies || 0)
         ),
 
+      halloweenCandy: Math.max(0, Number(halloweenCandy || 0)),
+
       classId:
         classId || ""
     };
@@ -1990,6 +2014,7 @@ app.post(
       coins,
       xp,
       trophies,
+      halloweenCandy,
       classId,
       onlineOnly
     } = req.body;
@@ -2040,6 +2065,8 @@ app.post(
           0,
           Number(trophies || 0)
         ),
+
+      halloweenCandy: Math.max(0, Number(halloweenCandy || 0)),
 
       classId:
         classId || ""
@@ -2097,7 +2124,7 @@ app.get("/api/admin/bootstrap",(req,res)=>{
 
 app.post("/api/admin/reward-all-now",(req,res)=>{
   if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
-  const reward={coins:Math.max(0,Number(req.body.coins||0)),xp:Math.max(0,Number(req.body.xp||0)),trophies:Math.max(0,Number(req.body.trophies||0)),classId:req.body.classId||""};
+  const reward={coins:Math.max(0,Number(req.body.coins||0)),xp:Math.max(0,Number(req.body.xp||0)),trophies:Math.max(0,Number(req.body.trophies||0)),halloweenCandy:Math.max(0,Number(req.body.halloweenCandy||0)),classId:req.body.classId||""};
   if(reward.classId&&!CLASSES.some(c=>c.id===reward.classId))return res.status(400).json({message:"Classe invalide."});
 
   let count=0;
@@ -2591,7 +2618,34 @@ app.get("/api/shop",(req,res)=>{
   const st=getBloodMoonStatus();
   const items=[...SHOP_ITEMS];
   if(st.active)items.push({id:"blood_quarter",name:"Quart de Lune de Sang",price:500,description:"Ajoute un quart à ta progression de Lune de Sang."});
-  res.json({items});
+  const halloween=getHalloweenStatus();
+  res.json({items,halloween:{active:Boolean(isV26Released()&&halloween.active),week:halloween.week,candy:0,shopItems:HALLOWEEN_SHOP_ITEMS}});
+});
+app.get("/api/halloween/shop",(req,res)=>{
+  const u=findUser(req.query.pseudo);
+  const st=getHalloweenStatus();
+  if(!u)return res.status(404).json({message:"Utilisateur introuvable."});
+  ensureUserState(u);
+  if(!isV26Released()||!st.active)return res.json({active:false,candy:u.halloweenCandy||0,items:[]});
+  res.json({active:true,week:st.week,candy:Number(u.halloweenCandy||0),items:HALLOWEEN_SHOP_ITEMS});
+});
+app.post("/api/halloween/shop/buy",(req,res)=>{
+  const u=findUser(req.body.pseudo);
+  const st=getHalloweenStatus();
+  if(!u)return res.status(404).json({message:"Utilisateur introuvable."});
+  if(!isV26Released()||!st.active)return res.status(400).json({message:"La boutique Halloween est fermée."});
+  ensureUserState(u);
+  const item=HALLOWEEN_SHOP_ITEMS.find(x=>x.id===req.body.itemId);
+  if(!item)return res.status(404).json({message:"Article Halloween introuvable."});
+  if(Number(u.halloweenCandy||0)<item.price)return res.status(400).json({message:"Pas assez de bonbons."});
+  if(item.id==="halloween_title"){u.titles=u.titles||["Nouveau Villageois"];if(u.titles.includes("Maître des citrouilles"))return res.status(400).json({message:"Tu possèdes déjà ce titre."});}
+  u.halloweenCandy-=item.price;
+  if(item.id==="halloween_coins")u.coins=Number(u.coins||0)+250;
+  if(item.id==="halloween_xp"){u.xp=Number(u.xp||0)+500;updateLevel(u);}
+  if(item.id==="halloween_trophy")u.trophies=Number(u.trophies||0)+3;
+  if(item.id==="halloween_title")u.titles.push("Maître des citrouilles");
+  saveDatabase(); emitProfile(u);
+  res.json({message:`${item.name} acheté !`,user:publicUser(u),candy:u.halloweenCandy});
 });
 app.post("/api/shop/buy",(req,res)=>{
   const u=findUser(req.body.pseudo);
@@ -2604,15 +2658,9 @@ app.post("/api/shop/buy",(req,res)=>{
   if(Number(u.coins||0)<item.price)return res.status(400).json({message:"Pas assez de pièces."});
   u.coins-=item.price;
   const now=Date.now();
-  if(id==="blood_quarter"){
-    addBloodMoonQuarter(u);
-  }else{
-    const key=`${id}_until`;
-    const currentUntil=Number(u.boosts[key]||0);
-    u.boosts[key]=Math.max(currentUntil,now)+item.durationMs;
-  }
-  saveDatabase();
-  emitProfile(u);
+  if(id==="blood_quarter"){ addBloodMoonQuarter(u); }
+  else { const key=`${id}_until`; const currentUntil=Number(u.boosts[key]||0); u.boosts[key]=Math.max(currentUntil,now)+item.durationMs; }
+  saveDatabase(); emitProfile(u);
   res.json({message:id==="blood_quarter"?"Quart de Lune de Sang acheté !":"Achat effectué : bonus actif pendant 10 minutes !",user:publicUser(u),boosts:u.boosts});
 });
 

@@ -71,6 +71,7 @@ function defaultDatabase() {
     },
     bloodMoonProgress: {},
     bloodMoonManualUntil: 0,
+    halloweenEvent: { active: false, week: 0, startedAt: 0, endsAt: 0 },
     globalBoosts: {
       coins: { multiplier: 1, until: 0 },
       xp: { multiplier: 1, until: 0 },
@@ -83,6 +84,7 @@ function mergeDatabase(database) {
   const merged = { ...defaultDatabase(), ...(database || {}) };
   merged.announcements = { ...defaultDatabase().announcements, ...(database?.announcements || {}) };
   merged.globalBoosts = { ...defaultDatabase().globalBoosts, ...(database?.globalBoosts || {}) };
+  merged.halloweenEvent = { ...defaultDatabase().halloweenEvent, ...(database?.halloweenEvent || {}) };
   ["coins", "xp", "trophies"].forEach(type => {
     merged.globalBoosts[type] = {
       multiplier: Number(database?.globalBoosts?.[type]?.multiplier || 1),
@@ -134,6 +136,15 @@ if (process.env.DATABASE_URL) {
     connectionTimeoutMillis: 10000
   });
 }
+
+function getHalloweenStatus() {
+  const e=db.halloweenEvent||{}, now=Date.now();
+  const active=Boolean(e.active)&&[1,2,3,4].includes(Number(e.week))&&Number(e.endsAt)>now;
+  if(e.active&&!active){db.halloweenEvent={...e,active:false};saveDatabase();}
+  return {active,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:active?Number(e.endsAt):null};
+}
+function startHalloweenWeek(week){const w=Number(week);if(![1,2,3,4].includes(w))throw new Error('Semaine Halloween invalide.');const startedAt=Date.now();db.halloweenEvent={active:true,week:w,startedAt,endsAt:startedAt+7*24*60*60*1000};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
+function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 
 function normalizeLoadedUsers() {
   db.globalBoosts = db.globalBoosts || {};
@@ -1604,6 +1615,13 @@ app.post("/api/blood-moon/claim",(req,res)=>{
 
 
 /* =========================================
+   API : ADMIN - ÉVÉNEMENT HALLOWEEN
+========================================= */
+app.get('/api/halloween',(req,res)=>res.json({event:getHalloweenStatus()}));
+app.post('/api/admin/halloween/start',(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:'Accès refusé.'});try{const event=startHalloweenWeek(req.body.week);res.json({message:`🎃 Semaine ${event.week} d'Halloween activée pendant 7 jours.`,event});}catch(e){res.status(400).json({message:e.message});}});
+app.post('/api/admin/halloween/stop',(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:'Accès refusé.'});const was=getHalloweenStatus().active,event=stopHalloweenEvent();res.json({message:was?'🛑 Événement Halloween arrêté manuellement.':'🛑 Événement Halloween déjà arrêté.',event});});
+
+/* =========================================
    API : ADMIN - LUNE DE SANG MANUELLE
 ========================================= */
 app.post("/api/admin/blood-moon/start", (req,res)=>{
@@ -2079,7 +2097,7 @@ app.post(
 
 app.get("/api/admin/bootstrap",(req,res)=>{
   if(normalizePseudo(req.query.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
-  res.json({users:db.users.map(publicUser),classes:CLASSES,announcement:db.announcements,globalBoosts:getGlobalBoostPayload()});
+  res.json({users:db.users.map(publicUser),classes:CLASSES,announcement:db.announcements,globalBoosts:getGlobalBoostPayload(),halloween:getHalloweenStatus()});
 });
 
 app.post("/api/admin/reward-all-now",(req,res)=>{
@@ -3636,7 +3654,7 @@ setInterval(
    DÉMARRAGE
 ========================================= */
 
-setInterval(()=>{purgeExpiredNotifications();saveDatabase();},30000);
+setInterval(()=>{const before=Boolean(db.halloweenEvent?.active),status=getHalloweenStatus();if(before&&!status.active)io.emit("halloweenStatusChanged",status);purgeExpiredNotifications();saveDatabase();},30000);
 
 async function startServer() {
   try {

@@ -1234,3 +1234,11 @@ body.in-game .v19-game { max-width:1180px; min-height:calc(100vh - 20px); margin
 /* V26 - contrôle de l'événement Halloween */
 .admin-halloween-buttons{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;}
 .admin-halloween-card{border:1px solid rgba(255,145,0,.35);}
+
+/* V26 — monnaie Halloween */
+.candy-stat{white-space:nowrap}
+.halloween-shop{margin-top:22px;padding:20px;border:1px solid rgba(255,140,0,.35);border-radius:16px;background:rgba(40,15,0,.35)}
+.halloween-shop h2{margin-top:0}
+.halloween-candy-balance{font-size:1.15rem}
+.halloween-shop-card{border-color:rgba(255,140,0,.3)}
+.halloween-shop-closed{opacity:.8}

@@ -11,6 +11,8 @@ let currentRoomCode = null;
 let isRoomHost = false;
 let selectedAdminUser = null;
 let classesData = [];
+let v26ReleaseActive = false;
+let halloweenActive = false;
 
 const ADMIN_PSEUDO = "creator2026";
 
@@ -574,6 +576,8 @@ function getClassEmoji(classId = "") {
     return "🧪";
   }
 
+  if (classId.startsWith("cupid")) return "💘";
+  if (classId.startsWith("pumpkin")) return "🎃";
 
   if (classId.startsWith("premium")) {
     return "💎";
@@ -632,9 +636,10 @@ function renderClasses() {
         </h3>
 
         <p>
-          🪙 ${classe.price}
+          🪙 ${classe.effectivePrice ?? classe.price}${classe.effectivePrice !== undefined && classe.effectivePrice !== classe.price ? ` <s>${classe.price}</s>` : ""}
           • 🎲 ${classe.chance}% de chance
         </p>
+        ${classe.id==="pumpkin1"?"<small>🎃 Temporaire — disponible uniquement pendant Halloween.</small>":""}
       </div>
 
       <button type="button">
@@ -1065,7 +1070,7 @@ $("startGameWithBotsButton")?.addEventListener(
 
 socket.on(
   "playerSearchStarted",
-  ({ duration = 10000 } = {}) => {
+  ({ duration = 10000, realPlayers = false } = {}) => {
     document.body.dataset.lgPhase="search";
     const container = $("roomsList");
     if (!container) return;
@@ -1075,7 +1080,7 @@ socket.on(
       <div class="room-card">
         <h2>🔎 Recherche de joueurs...</h2>
         <p>Recherche pendant <strong id="searchCountdown">${remaining}s</strong>.</p>
-        <p>Les places manquantes seront complétées par des bots.</p>
+        <p>${realPlayers?"Les joueurs qui ont lancé la recherche en même temps sont regroupés. Les places restantes seront complétées par des bots après 10 secondes.":"Les places manquantes seront complétées par des bots."}</p>
       </div>
     `;
 
@@ -2226,7 +2231,7 @@ renderCurrentRoom = function(room){
   const c=$("roomsList");if(!c)return;currentRoomCode=room.code;isRoomHost=room.host===currentUser?.pseudo;
   c.innerHTML=`<div class="room-card room-main-card"><h3>🎮 Salon ${esc(room.code)}</h3><p>👑 ${esc(room.host)} • 👥 ${room.players.length}/8 ${room.ranked?"• 🏆 CLASSÉ":"• 🎮 NORMAL"}</p><div class="ranked-room-row"><label><input id="roomRankedToggle" type="checkbox" ${room.ranked?"checked":""} ${isRoomHost?"":"disabled"}> 🏆 Activer le mode classé</label></div><div id="currentPlayers"></div><div id="roomActions"></div></div>`;
   const pc=$("currentPlayers");(room.players||[]).forEach(p=>{const d=document.createElement("div");d.className="room-player-row";d.textContent=`${p.isBot?"🤖":"👤"} ${p.pseudo}`;pc.appendChild(d);});
-  const a=$("roomActions");if(isRoomHost&&room.status==="waiting"){a.innerHTML=`<button id="roomStartOther" class="main-button">🐺 Lancer la partie avec d'autres joueurs</button><button id="roomStartBots" class="secondary-button">🤖 Lancer la partie avec bots</button>`;$("roomStartOther").onclick=()=>socket.emit("startGame",{code:room.code,pseudo:currentUser.pseudo});$("roomStartBots").onclick=()=>socket.emit("startGameWithBots",{code:room.code,pseudo:currentUser.pseudo});}
+  const a=$("roomActions");if(room.status==="waiting"){a.innerHTML=`${v26ReleaseActive?'<button id="roomStartOther" class="main-button">🔎 Rechercher de vrais joueurs</button>':isRoomHost?'<button id="roomStartOther" class="main-button">🐺 Lancer la recherche de joueurs</button>':''}${isRoomHost?'<button id="roomStartBots" class="secondary-button">🤖 Lancer la partie avec bots</button>':''}`;$("roomStartOther")?.addEventListener("click",()=>socket.emit("startGame",{code:room.code,pseudo:currentUser.pseudo}));$("roomStartBots")?.addEventListener("click",()=>socket.emit("startGameWithBots",{code:room.code,pseudo:currentUser.pseudo}));}
   $("roomRankedToggle")?.addEventListener("change",(event)=>{if(isRoomHost)socket.emit("setRoomRanked",{code:room.code,pseudo:currentUser.pseudo,ranked:event.currentTarget.checked});});
   loadRoomFriendsV8();
 };
@@ -2272,11 +2277,14 @@ async function loadAdminV8(){
   if(cc)cc.innerHTML=`<h4>🐺 Classes</h4>`+d.classes.map(x=>`<div class="admin-class-row"><b>${esc(x.name)}</b><span>${x.price} 🪙 • ${x.chance}%</span></div>`).join("");
   renderAdminBoostsV16(d.globalBoosts);
   renderAdminHalloween(d.halloween);
+  renderAdminV26Release(d.v26Release,d.classDiscount);
   if(uc)uc.innerHTML=`<h4>👥 ${d.users.length} joueur(s)</h4>`+d.users.map(u=>`<div class="admin-user-row"><span>${esc(u.icon||"🐺")} ${esc(u.pseudo)}</span><small>🪙${u.coins||0} • ✨${u.xp||0} • 🏆${u.trophies||0} • ${esc(u.rankedRank||"Bois")}</small><button class="secondary-button admin-select-user" data-pseudo="${esc(u.pseudo)}">Sélectionner</button></div>`).join("");uc?.querySelectorAll(".admin-select-user").forEach(b=>b.onclick=()=>{$("adminPlayerSearch").value=b.dataset.pseudo;$ ("adminSearchButton")?.click();});
  }catch(e){$("adminMessage").textContent="❌ "+e.message;}
 }
 $("adminButton")?.addEventListener("click",()=>setTimeout(loadAdminV8,50));
 $("adminRewardType")?.addEventListener("change",()=>{});
+
+function renderAdminV26Release(release,discount){const st=$("adminV26Status");if(st)st.textContent=release?.active?`✅ V26 active depuis ${new Date(Number(release.updatedAt||Date.now())).toLocaleString("fr-FR")}`:"🔒 V26 préparée mais pas encore mise à jour";const ds=$("adminClassDiscountStatus");if(ds){const pct=Number(discount?.percent||0),until=Number(discount?.until||0);ds.textContent=pct&&until>Date.now()?`🎟️ ${pct}% actif • encore ${Math.ceil((until-Date.now())/60000)} min`:"Aucune réduction active";}}
 
 function renderAdminHalloween(status){const el=$("adminHalloweenStatus");if(!el)return;if(!status?.active){el.textContent=status?.week?`🎃 Semaine ${status.week} terminée — événement arrêté.`:"🎃 Événement désactivé.";return;}const left=Math.max(0,Number(status.endsAt||0)-Date.now()),d=Math.floor(left/86400000),h=Math.floor(left%86400000/3600000);el.textContent=`🎃 Semaine ${status.week} active • encore ${d}j ${h}h`;}
 function renderAdminBoostsV16(boosts){
@@ -2319,6 +2327,9 @@ document.querySelectorAll(".admin-boost-btn").forEach(btn=>{
     activateAdminBoostV16(wrap.dataset.boostType,Number(btn.dataset.mult));
   });
 });
+
+$("adminV26UpdateButton")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/v26/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});v26ReleaseActive=true;$("adminV26Message").textContent="✅ "+d.message;renderAdminV26Release(d.release);loadClasses();}catch(e){$("adminV26Message").textContent="❌ "+e.message;}});
+[10,25,50,75,0].forEach(pct=>{$(`.admin-discount-btn[data-pct="${pct}"]`)?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/class-discount",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,percent:pct,durationMinutes:10})});$("adminClassDiscountMessage").textContent="✅ "+d.message;renderAdminV26Release(null,d.classDiscount);loadClasses();}catch(e){$("adminClassDiscountMessage").textContent="❌ "+e.message;}});});
 
 document.querySelectorAll(".admin-halloween-start").forEach(btn=>btn.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/halloween/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,week:Number(btn.dataset.week)})});$("adminHalloweenMessage").textContent="✅ "+d.message;renderAdminHalloween(d.event);}catch(e){$("adminHalloweenMessage").textContent="❌ "+e.message;}}));
 $("adminHalloweenStop")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/halloween/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});$("adminHalloweenMessage").textContent="✅ "+d.message;renderAdminHalloween(d.event);}catch(e){$("adminHalloweenMessage").textContent="❌ "+e.message;}});
@@ -2455,7 +2466,9 @@ $("rankedModeToggle")?.addEventListener("change",()=>{if(currentRoomCode&&isRoom
 /* Connexion : initialisation V8 */
 const _loginUserV8=loginUser;
 loginUser=function(user){_loginUserV8(user);ensureV8AfterLogin();};
-function ensureV8AfterLogin(){if($("chatEnabledToggle"))$("chatEnabledToggle").checked=currentUser.chatEnabled!==false;loadNotificationsV8();refreshBloodMoonButton();if(isAdmin())loadAdminV8();}
+async function loadV26Release(){try{const d=await apiJson("/api/release");v26ReleaseActive=Boolean(d.v26Release?.active);const h=await apiJson("/api/halloween");halloweenActive=Boolean(h.event?.active);}catch(_){v26ReleaseActive=false;halloweenActive=false;}}
+
+function ensureV8AfterLogin(){loadV26Release();if($("chatEnabledToggle"))$("chatEnabledToggle").checked=currentUser.chatEnabled!==false;loadNotificationsV8();refreshBloodMoonButton();if(isAdmin())loadAdminV8();}
 window.addEventListener("load",()=>setTimeout(ensureV8AfterLogin,250));
 setInterval(()=>{if(currentUser){refreshBloodMoonButton();if(currentRoomCode)loadRoomFriendsV8();}},30000);
 
@@ -2496,6 +2509,9 @@ function renderGlobalBoostsV19(payload){
   box.classList.toggle("hidden",!active.length);
 }
 
+socket.on("halloweenStatusChanged",d=>{halloweenActive=Boolean(d?.active);loadClasses();});
+socket.on("v26Released",d=>{v26ReleaseActive=Boolean(d?.active);if(isAdmin())loadAdminV8();loadClasses();});
+socket.on("classDiscountUpdated",d=>{if(isAdmin())loadAdminV8();loadClasses();});
 socket.on("globalBoostUpdated",d=>{
   renderGlobalBoostsV19(d?.boosts||d?.globalBoosts||{});
   if(d?.boost) updateProfile();
@@ -2504,7 +2520,7 @@ socket.on("globalBoostUpdated",d=>{
 socket.on("nightStepTimer",d=>{
   const box=$("gameTimer"); if(!box)return; const end=Date.now()+Number(d.duration||0);
   clearInterval(window.gameTimerInterval);
-  const labels={cupid:"💘 Tour de Cupidon — choisis 2 amoureux",wolves:"🐺 Tour des Loups-Garous — votez ensemble",seer:"🔮 Tour de la Voyante — découvre un rôle",witch:"🧪 Tour de la Sorcière — potions"};
+  const labels={cupid:"💘 Tour de Cupidon — choisis 2 amoureux",wolves:"🐺 Tour des Loups-Garous — votez ensemble",pumpkin:"🎃 Tour de la Citrouille — choisis 2 victimes",seer:"🔮 Tour de la Voyante — découvre un rôle",witch:"🧪 Tour de la Sorcière — potions",giant:"🗿 Tour du Géant de pierre — choisis 1 victime"};
   const tick=()=>{const left=Math.max(0,end-Date.now());box.textContent=`${labels[d.step]||"Tour de nuit"} • ${Math.ceil(left/1000)}s`;if(!left)clearInterval(window.gameTimerInterval);};
   tick();window.gameTimerInterval=setInterval(tick,250);
 });
@@ -2521,6 +2537,8 @@ function renderGamePhaseV19(phase,data){
   const isNightRole=(r)=>phase==="night"&&myGameRole===r;
   const canDayVote=phase==="day";
   const canWolf=phase==="night"&&step==="wolves"&&myGameRole==="Loup-Garou";
+  const canPumpkin=phase==="night"&&step==="pumpkin"&&myGameRole==="Citrouille";
+  const canGiant=phase==="night"&&step==="giant"&&myGameRole==="Géant de pierre";
   const canCupid=isNightRole("Cupidon")&&step==="cupid";
   const canSeer=isNightRole("Voyante")&&step==="seer";
   const canWitch=isNightRole("Sorcière")&&step==="witch";
@@ -2528,10 +2546,10 @@ function renderGamePhaseV19(phase,data){
   c.innerHTML=`<div class="game-screen v19-game">
     <div class="game-header"><div><span class="game-phase-badge ${phase}">${phase==="night"?"🌙 NUIT":"☀️ JOUR"}</span><h2>${phase==="night"?"Tout le village dort…":"☀️ Le village se réunit"}</h2><p class="game-subtitle">Jour ${data.day||1} • ${alive.length}/${all.length} vivants • chaque rôle joue à son tour</p></div><div id="gameTimer" class="game-v19-timer">${phase==="day"?"Discussion ouverte":"La nuit commence"}</div></div>
     <div class="game-role-card featured"><div class="role-label">TON RÔLE — SECRET</div><div class="my-role">🎭 ${esc(myGameRole||"Chargement...")}</div><small>Ton rôle est visible uniquement sur ton écran.</small></div>
-    <div class="game-instruction">${canCupid?"💘 C’EST TON TOUR — Cupidon choisit deux amoureux. Tu n’agis qu’une seule fois, pendant la première nuit.":canWolf?"🐺 C’EST LE TOUR DES LOUPS — discutez entre vous puis votez pour une victime. Les villageois ne voient rien.":canSeer?"🔮 C’EST TON TOUR — la Voyante choisit un joueur et découvre secrètement son rôle.":canWitch?"🧪 C’EST TON TOUR — la Sorcière voit la victime des Loups et peut utiliser sa potion de vie ou de mort.":phase==="night"?"🌙 TU ATTENDS — un autre rôle joue actuellement. Ton écran reste calme jusqu’à ton tour.":"☀️ C’EST LE TOUR DU VILLAGE — discute, observe les votes puis choisis un joueur à éliminer."}</div>
+    <div class="game-instruction">${canCupid?"💘 C’EST TON TOUR — Cupidon choisit deux amoureux. Tu n’agis qu’une seule fois, pendant la première nuit.":canWolf?"🐺 C’EST LE TOUR DES LOUPS — discutez entre vous puis votez pour une victime. Les villageois ne voient rien.":canPumpkin?"🎃 C’EST TON TOUR — choisis deux victimes. Une seule utilisation, puis tu redeviens Villageois.":canGiant?"🗿 C’EST TON TOUR — choisis une victime. Une seule utilisation, puis tu redeviens Villageois.":canSeer?"🔮 C’EST TON TOUR — la Voyante choisit un joueur et découvre secrètement son rôle.":canWitch?"🧪 C’EST TON TOUR — la Sorcière voit la victime des Loups et peut utiliser sa potion de vie ou de mort.":phase==="night"?"🌙 TU ATTENDS — un autre rôle joue actuellement. Ton écran reste calme jusqu’à ton tour.":"☀️ C’EST LE TOUR DU VILLAGE — discute, observe les votes puis choisis un joueur à éliminer."}</div>
     ${canCupid?'<div class="cupid-choice"><strong>1er choix :</strong><span id="cupidFirst">Aucun</span><strong>2e choix :</strong><span id="cupidSecond">Aucun</span></div>':''}
     ${canWitch?'<div class="witch-victim-box">🧪 <span id="witchVictimInfo">La Sorcière reçoit la cible des Loups...</span></div>':''}
-    <div class="game-night-order"><span class="active">1. Cupidon</span><span>2. Loups</span><span>3. Voyante</span><span>4. Sorcière</span><span>5. Village</span></div>
+    <div class="game-night-order">${v26ReleaseActive?(halloweenActive?'<span>1. Cupidon</span><span>2. Loups</span><span>3. Citrouille</span><span>4. Voyante</span><span>5. Sorcière</span><span>6. Géant</span><span>7. Village</span>':'<span>1. Cupidon</span><span>2. Loups</span><span>3. Voyante</span><span>4. Sorcière</span><span>5. Géant</span><span>6. Village</span>'):'<span>1. Cupidon</span><span>2. Loups</span><span>3. Voyante</span><span>4. Sorcière</span><span>5. Village</span>'}</div>
     <div class="game-players-grid" id="gameTargets"></div>
     <div class="game-action-panel" id="gameActions"></div>
     <div class="game-chat-panel"><div class="game-chat-head"><strong>💬 Discussion du village</strong><span>${phase==="day"?"Active":"Fermée pendant la nuit"}</span></div><div id="gameChatMessages" class="game-chat-messages"></div><div class="game-chat-compose"><input id="gameChatInput" maxlength="300" placeholder="Message respectueux…" ${phase!=="day"?"disabled":""}><button id="gameChatSend" class="main-button" ${phase!=="day"?"disabled":""}>Envoyer</button></div></div>
@@ -2541,12 +2559,16 @@ function renderGamePhaseV19(phase,data){
   if($("gameChatMessages"))$("gameChatMessages").scrollTop=$("gameChatMessages").scrollHeight;
   const send=()=>{const input=$("gameChatInput");const text=input?.value.trim();if(!text)return;socket.emit("gameChat",{code:currentRoomCode,pseudo:currentUser.pseudo,text});input.value="";};
   $("gameChatSend")?.addEventListener("click",send);$("gameChatInput")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();send();}});
-  targets.forEach(p=>{const b=document.createElement("button");b.type="button";b.className="game-player-card";b.innerHTML=`<span class="player-avatar">${p.isBot?"🤖":"👤"}</span><span class="player-name">${esc(p.pseudo)}</span><span class="player-status">${p.isBot?"BOT":"JOUEUR"}</span>`;b.onclick=()=>{if(selected.includes(p.pseudo))return;if(canCupid&&selected.length<2){selected.push(p.pseudo);b.classList.add("selected");$(selected.length===1?"cupidFirst":"cupidSecond").textContent=p.pseudo;if(selected.length===2)$("cupidConfirm")?.removeAttribute("disabled");return;}selected=[p.pseudo];t.querySelectorAll("button").forEach(x=>x.classList.remove("selected"));b.classList.add("selected");$("voteConfirm")?.removeAttribute("disabled");$("seerBtn")?.removeAttribute("disabled");$("witchSave")?.removeAttribute("disabled");$("witchKill")?.removeAttribute("disabled");};t.appendChild(b);});
+  targets.forEach(p=>{const b=document.createElement("button");b.type="button";b.className="game-player-card";b.innerHTML=`<span class="player-avatar">${p.isBot?"🤖":"👤"}</span><span class="player-name">${esc(p.pseudo)}</span><span class="player-status">${p.isBot?"BOT":"JOUEUR"}</span>`;b.onclick=()=>{if(selected.includes(p.pseudo))return;if((canCupid||canPumpkin)&&selected.length<2){selected.push(p.pseudo);b.classList.add("selected");if(canCupid)$(selected.length===1?"cupidFirst":"cupidSecond").textContent=p.pseudo;if(selected.length===2)$(canCupid?"cupidConfirm":"pumpkinConfirm")?.removeAttribute("disabled");return;}selected=[p.pseudo];t.querySelectorAll("button").forEach(x=>x.classList.remove("selected"));b.classList.add("selected");$("voteConfirm")?.removeAttribute("disabled");$("seerBtn")?.removeAttribute("disabled");$("witchSave")?.removeAttribute("disabled");$("witchKill")?.removeAttribute("disabled");$("giantConfirm")?.removeAttribute("disabled");};t.appendChild(b);});
   if(canCupid)a.innerHTML='<div class="vote-panel"><strong>💘 Choix de Cupidon</strong><button id="cupidConfirm" class="main-button" disabled>💘 Désigner les deux joueurs</button></div>';
+  if(canPumpkin)a.innerHTML='<div class="vote-panel"><strong>🎃 Pouvoir de la Citrouille</strong><span>Choisis exactement 2 victimes.</span><button id="pumpkinConfirm" class="main-button" disabled>🎃 Éliminer les deux</button></div>';
+  if(canGiant)a.innerHTML='<div class="vote-panel"><strong>🗿 Pouvoir du Géant de pierre</strong><span>Choisis 1 victime. Après cela, tu redeviens Villageois.</span><button id="giantConfirm" class="main-button" disabled>🗿 Éliminer</button></div>';
   if(canWolf||canDayVote)a.innerHTML='<div class="vote-panel"><strong>🗳️ Vote</strong><span>Un seul vote par phase.</span><button id="voteConfirm" class="main-button" disabled>🗳️ Choisir une cible</button></div>';
   if(canSeer)a.innerHTML='<div class="vote-panel"><strong>🔮 Voyante</strong><button id="seerBtn" class="main-button" disabled>🔮 Découvrir le rôle</button></div>';
   if(canWitch)a.innerHTML='<div class="vote-panel"><strong>🧪 Sorcière</strong><div class="game-actions"><button id="witchSave" class="main-button" disabled>🛡️ Sauver la cible</button><button id="witchKill" class="secondary-button" disabled>☠️ Potion de mort</button><button id="witchPass" class="secondary-button">Passer</button></div></div>';
   $("cupidConfirm")?.addEventListener("click",()=>{if(selected.length===2){socket.emit("roleAction",{code:currentRoomCode,pseudo:currentUser.pseudo,action:"cupid",targetPseudo:selected[0],secondTargetPseudo:selected[1]});$("cupidConfirm").disabled=true;}});
+  $("pumpkinConfirm")?.addEventListener("click",()=>{if(selected.length===2){socket.emit("roleAction",{code:currentRoomCode,pseudo:currentUser.pseudo,action:"pumpkinKill",targetPseudo:selected[0],secondTargetPseudo:selected[1]});$("pumpkinConfirm").disabled=true;t.querySelectorAll("button").forEach(x=>x.disabled=true);}});
+  $("giantConfirm")?.addEventListener("click",()=>{if(selected.length===1){socket.emit("roleAction",{code:currentRoomCode,pseudo:currentUser.pseudo,action:"giantKill",targetPseudo:selected[0]});$("giantConfirm").disabled=true;t.querySelectorAll("button").forEach(x=>x.disabled=true);}});
   $("voteConfirm")?.addEventListener("click",()=>{if(!selected[0]||voted)return;voted=true;socket.emit(canDayVote?"dayVote":"nightVote",{code:currentRoomCode,pseudo:currentUser.pseudo,targetPseudo:selected[0]});$("voteConfirm").disabled=true;$("voteConfirm").textContent="✅ Vote envoyé";t.querySelectorAll("button").forEach(x=>x.disabled=true);});
   $("seerBtn")?.addEventListener("click",()=>{if(!selected[0])return;socket.emit("roleAction",{code:currentRoomCode,pseudo:currentUser.pseudo,action:"inspect",targetPseudo:selected[0]});$("seerBtn").disabled=true;});
   $("witchSave")?.addEventListener("click",()=>{if(window.witchVictim){socket.emit("roleAction",{code:currentRoomCode,pseudo:currentUser.pseudo,action:"save",targetPseudo:window.witchVictim});$("witchSave").disabled=true;$("witchKill").disabled=true;}});

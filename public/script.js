@@ -2284,7 +2284,15 @@ async function loadAdminV8(){
 $("adminButton")?.addEventListener("click",()=>setTimeout(loadAdminV8,50));
 $("adminRewardType")?.addEventListener("change",()=>{});
 
-function renderAdminV26Release(release,discount){const st=$("adminV26Status");if(st)st.textContent=release?.active?`✅ V26 active depuis ${new Date(Number(release.updatedAt||Date.now())).toLocaleString("fr-FR")}`:"🔒 V26 préparée mais pas encore mise à jour";const ds=$("adminClassDiscountStatus");if(ds){const pct=Number(discount?.percent||0),until=Number(discount?.until||0);ds.textContent=pct&&until>Date.now()?`🎟️ ${pct}% actif • encore ${Math.ceil((until-Date.now())/60000)} min`:"Aucune réduction active";}}
+function renderAdminV26Release(release,discount){
+  const active=Boolean(release?.active);
+  const st=$("adminV26Status");
+  if(st)st.textContent=active?`✅ V26 active depuis ${new Date(Number(release.updatedAt||Date.now())).toLocaleString("fr-FR")}`:"🔒 V26 préparée mais pas encore mise à jour";
+  const btn=$("adminV26UpdateButton");
+  if(btn){btn.classList.toggle("hidden",active);btn.disabled=active;}
+  const ds=$("adminClassDiscountStatus");
+  if(ds){const pct=Number(discount?.percent||0),until=Number(discount?.until||0);ds.textContent=pct&&until>Date.now()?`🎟️ ${pct}% actif • encore ${Math.ceil((until-Date.now())/60000)} min`:"Aucune réduction active";}
+}
 
 function renderAdminHalloween(status){const el=$("adminHalloweenStatus");if(!el)return;if(!status?.active){el.textContent=status?.week?`🎃 Semaine ${status.week} terminée — événement arrêté.`:"🎃 Événement désactivé.";return;}const left=Math.max(0,Number(status.endsAt||0)-Date.now()),d=Math.floor(left/86400000),h=Math.floor(left%86400000/3600000);el.textContent=`🎃 Semaine ${status.week} active • encore ${d}j ${h}h`;}
 function renderAdminBoostsV16(boosts){
@@ -2328,7 +2336,22 @@ document.querySelectorAll(".admin-boost-btn").forEach(btn=>{
   });
 });
 
-$("adminV26UpdateButton")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/v26/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});v26ReleaseActive=true;$("adminV26Message").textContent="✅ "+d.message;renderAdminV26Release(d.release);loadClasses();}catch(e){$("adminV26Message").textContent="❌ "+e.message;}});
+$("adminV26UpdateButton")?.addEventListener("click",async()=>{
+  if(!isAdmin())return;
+  const btn=$("adminV26UpdateButton");
+  if(btn)btn.disabled=true;
+  try{
+    const d=await apiJson("/api/admin/v26/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});
+    v26ReleaseActive=true;
+    $("adminV26Message").textContent="✅ "+d.message;
+    renderAdminV26Release(d.release);
+    loadClasses();
+  }catch(e){
+    $("adminV26Message").textContent="❌ "+e.message;
+    try{const r=await apiJson("/api/release");renderAdminV26Release(r.v26Release);}catch(_){}
+    if(!v26ReleaseActive&&btn)btn.disabled=false;
+  }
+});
 [10,25,50,75,0].forEach(pct=>{$(`.admin-discount-btn[data-pct="${pct}"]`)?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/class-discount",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,percent:pct,durationMinutes:10})});$("adminClassDiscountMessage").textContent="✅ "+d.message;renderAdminV26Release(null,d.classDiscount);loadClasses();}catch(e){$("adminClassDiscountMessage").textContent="❌ "+e.message;}});});
 
 document.querySelectorAll(".admin-halloween-start").forEach(btn=>btn.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/halloween/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,week:Number(btn.dataset.week)})});$("adminHalloweenMessage").textContent="✅ "+d.message;renderAdminHalloween(d.event);}catch(e){$("adminHalloweenMessage").textContent="❌ "+e.message;}}));

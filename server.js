@@ -72,6 +72,8 @@ function defaultDatabase() {
     bloodMoonProgress: {},
     bloodMoonManualUntil: 0,
     halloweenEvent: { active: false, week: 0, startedAt: 0, endsAt: 0 },
+    v26Release: { active: false, version: 25, updatedAt: 0 },
+    classDiscount: { percent: 0, until: 0 },
     globalBoosts: {
       coins: { multiplier: 1, until: 0 },
       xp: { multiplier: 1, until: 0 },
@@ -85,6 +87,8 @@ function mergeDatabase(database) {
   merged.announcements = { ...defaultDatabase().announcements, ...(database?.announcements || {}) };
   merged.globalBoosts = { ...defaultDatabase().globalBoosts, ...(database?.globalBoosts || {}) };
   merged.halloweenEvent = { ...defaultDatabase().halloweenEvent, ...(database?.halloweenEvent || {}) };
+  merged.v26Release = { ...defaultDatabase().v26Release, ...(database?.v26Release || {}) };
+  merged.classDiscount = { ...defaultDatabase().classDiscount, ...(database?.classDiscount || {}) };
   ["coins", "xp", "trophies"].forEach(type => {
     merged.globalBoosts[type] = {
       multiplier: Number(database?.globalBoosts?.[type]?.multiplier || 1),
@@ -145,6 +149,12 @@ function getHalloweenStatus() {
 }
 function startHalloweenWeek(week){const w=Number(week);if(![1,2,3,4].includes(w))throw new Error('Semaine Halloween invalide.');const startedAt=Date.now();db.halloweenEvent={active:true,week:w,startedAt,endsAt:startedAt+7*24*60*60*1000};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
+function isV26Released(){ return Boolean(db.v26Release?.active && Number(db.v26Release?.version||0)>=26); }
+function getClassDiscountPercent(){ if(!isV26Released()) return 0; const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
+function getClassPrice(classe){ const pct=getClassDiscountPercent(); return Math.max(0,Math.floor(Number(classe?.price||0)*(1-pct/100))); }
+function getPublicClasses(){ return CLASSES.filter(c=>c.id!=="pumpkin1" || (isV26Released() && getHalloweenStatus().active)); }
+function releaseV26(){ db.v26Release={active:true,version:26,updatedAt:Date.now()}; saveDatabase(); const payload={...db.v26Release}; io.emit("v26Released",payload); return payload; }
+function setClassDiscount(percent,durationMinutes){ const pct=Math.max(0,Math.min(90,Number(percent||0))); db.classDiscount=pct?{percent:pct,until:Date.now()+Math.max(1,Math.min(1440,Number(durationMinutes||10)))*60000}:{percent:0,until:0}; saveDatabase(); const out={percent:getClassDiscountPercent(),until:db.classDiscount.until}; io.emit("classDiscountUpdated",out); return out; }
 
 function normalizeLoadedUsers() {
   db.globalBoosts = db.globalBoosts || {};
@@ -345,6 +355,15 @@ const CLASSES = [
     name: "Cupidon",
     price: 900,
     chance: 30
+  },
+
+  {
+    id: "pumpkin1",
+    name: "Citrouille",
+    price: 1200,
+    chance: 30,
+    temporary: true,
+    event: "halloween"
   },
 
   {
@@ -853,26 +872,13 @@ function roomPublic(room) {
 }
 
 function removeUserFromRooms(pseudo) {
-  const normalized =
-    normalizePseudo(pseudo);
-
-  db.rooms.forEach(
-    (room) => {
-      room.players =
-        room.players.filter(
-          (player) =>
-            normalizePseudo(
-              player.pseudo
-            ) !== normalized
-        );
-    }
-  );
-
-  db.rooms =
-    db.rooms.filter(
-      (room) =>
-        room.players.length > 0
-    );
+  const normalized=normalizePseudo(pseudo);
+  db.rooms.forEach(room=>{
+    const wasHost=normalizePseudo(room.host)===normalized;
+    room.players=room.players.filter(player=>normalizePseudo(player.pseudo)!==normalized);
+    if(wasHost&&room.players.length) room.host=room.players[0].pseudo;
+  });
+  db.rooms=db.rooms.filter(room=>room.players.length>0);
 }
 
 function addBotsToRoom(room) {
@@ -953,63 +959,26 @@ function getEquippedClass(player) {
 }
 
 function classCanGrantRole(classId, role) {
-  const exact = {
-    wolf1: ["Loup-Garou"],
-    wolf2: ["Loup-Garou"],
-    seer1: ["Voyante"],
-    witch1: ["Sorcière"],
-    cupid1: ["Cupidon"]
-  };
+  const exact={wolf1:["Loup-Garou"],wolf2:["Loup-Garou"],seer1:["Voyante"],witch1:["Sorcière"],cupid1:["Cupidon"],pumpkin1:["Citrouille"]};
   return Boolean(exact[classId]?.includes(role));
 }
-
-function getClassRole(classId) {
-  const map = {
-    wolf1: "Loup-Garou",
-    wolf2: "Loup-Garou",
-    seer1: "Voyante",
-    witch1: "Sorcière",
-    cupid1: "Cupidon"
-  };
-  return map[classId] || null;
-}
-
-function assignRolesForGame(players) {
-  // Pioche classique à 8 : 2 Loups, 1 Voyante, 1 Sorcière,
-  // 1 Cupidon et 3 Villageois. Le paquet est mélangé à chaque partie.
-  // Sans classe équipée, chaque joueur a la même chance d'obtenir chaque
-  // place du paquet. Une classe équipée garantit le personnage associé.
-  const rolePool = shuffle([
-    "Loup-Garou", "Loup-Garou",
-    "Voyante", "Sorcière", "Cupidon",
-    "Villageois", "Villageois", "Villageois"
-  ]);
-
-  const assignments = new Map();
-  const roleSlots = {};
-  rolePool.forEach(role => { roleSlots[role] = (roleSlots[role] || 0) + 1; });
-
-  // Classes équipées = priorité. Si deux joueurs ont la même classe et qu'il
-  // n'y a plus de place pour ce rôle, le joueur supplémentaire revient au tirage.
-  shuffle(players.slice()).forEach(player => {
-    const classe = getEquippedClass(player);
-    const wanted = getClassRole(classe?.id);
-    if (!wanted || !roleSlots[wanted]) return;
-    assignments.set(player.pseudo, wanted);
-    roleSlots[wanted]--;
-  });
-
-  // Tous les autres reçoivent aléatoirement les places restantes.
-  const freePlayers = shuffle(players.filter(p => !assignments.has(p.pseudo)));
-  const remainingRoles = shuffle(
-    Object.entries(roleSlots).flatMap(([role, count]) => Array(count).fill(role))
-  );
-  freePlayers.forEach((player, i) => {
-    assignments.set(player.pseudo, remainingRoles[i] || "Villageois");
-  });
-
+function getClassRole(classId){ return ({wolf1:"Loup-Garou",wolf2:"Loup-Garou",seer1:"Voyante",witch1:"Sorcière",cupid1:"Cupidon",pumpkin1:"Citrouille"})[classId]||null; }
+function assignRolesForGame(players){
+  const released=isV26Released();
+  const halloween=released&&getHalloweenStatus().active;
+  const rolePool=!released
+    ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Villageois","Villageois","Villageois"]
+    : halloween
+      ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Citrouille","Villageois"]
+      : ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Villageois","Villageois"];
+  const assignments=new Map(),slots={}; rolePool.forEach(r=>slots[r]=(slots[r]||0)+1);
+  shuffle(players.slice()).forEach(player=>{const c=getEquippedClass(player),wanted=getClassRole(c?.id);if(!wanted||!slots[wanted])return;if(wanted==="Citrouille"&&Math.random()>.30)return;assignments.set(player.pseudo,wanted);slots[wanted]--;});
+  const free=shuffle(players.filter(p=>!assignments.has(p.pseudo)));
+  const remaining=shuffle(Object.entries(slots).flatMap(([r,n])=>Array(n).fill(r)));
+  free.forEach((p,i)=>assignments.set(p.pseudo,remaining[i]||"Villageois"));
   return assignments;
 }
+function isWolfTeamRole(role){return role==="Loup-Garou"||role==="Citrouille";}
 
 function createGame(room) {
   const players = shuffle(room.players);
@@ -1027,8 +996,8 @@ function createGame(room) {
     id: createId(), roomCode: room.code, ranked: Boolean(room.ranked), phase: "night",
     nightStep: "cupid", day: 1, chat: [], players: gamePlayers,
     nightVotes: {}, dayVotes: {}, nightTargetPseudo: null,
-    nightActions: { saved: null, witchKill: null },
-    witchSaveUsed: false, witchKillUsed: false, cupidUsed: false,
+    nightActions: { saved: null, witchKill: null, pumpkinKills: [], giantKill: null },
+    witchSaveUsed: false, witchKillUsed: false, cupidUsed: false, pumpkinUsed: false, giantUsed: false,
     linkedPlayers: [], seerUsedThisNight: false, winner: null, createdAt: Date.now()
   };
 }
@@ -1050,15 +1019,13 @@ function checkGameWinner(game) {
   const wolves =
     alive.filter(
       (player) =>
-        player.role ===
-        "Loup-Garou"
+        isWolfTeamRole(player.role)
     );
 
   const villagers =
     alive.filter(
       (player) =>
-        player.role !==
-        "Loup-Garou"
+        !isWolfTeamRole(player.role)
     );
 
   if (wolves.length === 0) {
@@ -1106,7 +1073,7 @@ function finishGame(room) {
   game.phase="finished"; const blood=getBloodMoonStatus();
   game.players.forEach(player=>{
     if(player.isBot)return; const user=findUser(player.pseudo); if(!user)return; ensureUserState(user);
-    const isWolf=player.role==="Loup-Garou";
+    const isWolf=isWolfTeamRole(player.role);
     if(blood.active){registerBloodQuest(user,"bloodPlayed",1);if(game.ranked)registerBloodQuest(user,"bloodRanked",1);}
     const won=(game.winner==="Loups-Garous"&&isWolf)||(game.winner==="Villageois"&&!isWolf);
     // Chaque victoire rapporte toujours 1 trophée, même en partie normale.
@@ -1447,14 +1414,7 @@ app.post(
    API : CLASSES
 ========================================= */
 
-app.get(
-  "/api/classes",
-  (req, res) => {
-    res.json({
-      classes: CLASSES
-    });
-  }
-);
+app.get("/api/classes",(req,res)=>res.json({classes:getPublicClasses().map(c=>({...c,originalPrice:c.price,effectivePrice:getClassPrice(c)})),discountPercent:getClassDiscountPercent(),discountUntil:Number(db.classDiscount?.until||0)}));
 
 app.post(
   "/api/classes/buy",
@@ -1507,9 +1467,10 @@ app.post(
         });
     }
 
+    const price=getClassPrice(classe);
     if (
       Number(user.coins || 0) <
-      classe.price
+      price
     ) {
       return res
         .status(400)
@@ -1520,7 +1481,7 @@ app.post(
     }
 
     user.coins -=
-      classe.price;
+      price;
 
     user.classes.push(
       classe.id
@@ -1530,7 +1491,7 @@ app.post(
 
     res.json({
       message:
-        "Classe achetée !",
+        getClassDiscountPercent()>0 ? `Classe achetée avec ${getClassDiscountPercent()}% de réduction !` : "Classe achetée !",
       user:
         publicUser(user)
     });
@@ -2097,7 +2058,7 @@ app.post(
 
 app.get("/api/admin/bootstrap",(req,res)=>{
   if(normalizePseudo(req.query.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
-  res.json({users:db.users.map(publicUser),classes:CLASSES,announcement:db.announcements,globalBoosts:getGlobalBoostPayload(),halloween:getHalloweenStatus()});
+  res.json({users:db.users.map(publicUser),classes:getPublicClasses(),announcement:db.announcements,globalBoosts:getGlobalBoostPayload(),halloween:getHalloweenStatus(),v26Release:db.v26Release||{active:false,version:25,updatedAt:0},classDiscount:{percent:getClassDiscountPercent(),until:Number(db.classDiscount?.until||0)}});
 });
 
 app.post("/api/admin/reward-all-now",(req,res)=>{
@@ -2128,6 +2089,10 @@ app.post("/api/admin/reward-all-now",(req,res)=>{
 });
 
 
+
+app.get("/api/release",(req,res)=>res.json({v26Release:db.v26Release||{active:false,version:25,updatedAt:0}}));
+app.post("/api/admin/v26/update",(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});const release=releaseV26();res.json({message:"🚀 V26 mise à jour : Géant de pierre, correctifs et recherche de vrais joueurs activés.",release});});
+app.post("/api/admin/class-discount",(req,res)=>{if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});const pct=Number(req.body.percent||0);if(![0,10,25,50,75].includes(pct))return res.status(400).json({message:"Réduction invalide."});const discount=setClassDiscount(pct,Number(req.body.durationMinutes||10));res.json({message:pct?`🎟️ Réduction classes de ${pct}% activée.`:"🎟️ Réduction classes désactivée.",classDiscount:discount});});
 
 app.post("/api/admin/global-boost", (req,res)=>{
   if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO){
@@ -2831,7 +2796,9 @@ const GAME_TIMERS = {
   wolves: 90000,
   seer: 60000,
   witch: 60000,
-  day: 120000
+  day: 120000,
+  pumpkin: 60000,
+  giant: 60000
 };
 
 function aliveRole(game, role) {
@@ -2866,7 +2833,7 @@ function emitPublicGameState(room,event="gameState") {
     players:g.players.map(p=>({pseudo:p.pseudo,alive:p.alive,isBot:p.isBot})),
     ranked:g.ranked, voteCount:Object.keys(votes).length, requiredVotes:voters.length,
     chat:(g.chat||[]).slice(-50),
-    nightActionsAvailable:{wolvesVote:g.phase==="night"&&g.nightStep==="wolves",seer:g.phase==="night"&&g.nightStep==="seer",witch:g.phase==="night"&&g.nightStep==="witch",cupid:g.phase==="night"&&g.nightStep==="cupid"}
+    nightActionsAvailable:{wolvesVote:g.phase==="night"&&g.nightStep==="wolves",seer:g.phase==="night"&&g.nightStep==="seer",witch:g.phase==="night"&&g.nightStep==="witch",pumpkin:g.phase==="night"&&g.nightStep==="pumpkin",giant:g.phase==="night"&&g.nightStep==="giant",cupid:g.phase==="night"&&g.nightStep==="cupid"}
   });
 }
 
@@ -2875,7 +2842,7 @@ function startNightPhase(room){
   g.phase="night";
   g.nightVotes={};
   g.nightTargetPseudo=null;
-  g.nightActions={saved:null,witchKill:null};
+  g.nightActions={saved:null,witchKill:null,pumpkinKills:[],giantKill:null};
   g.seerUsedThisNight=false;
   const cupid=aliveRole(g,"Cupidon");
   g.nightStep=(g.day===1 && cupid && !g.cupidUsed)?"cupid":"wolves";
@@ -2928,6 +2895,19 @@ function startNightStep(room,step){
     return;
   }
 
+  if(step==="pumpkin"){
+    const pumpkin=aliveRole(g,"Citrouille"); if(!pumpkin||g.pumpkinUsed)return startNightStep(room,"seer");
+    const sid=onlineUsers.get(normalizePseudo(pumpkin.pseudo)); if(sid)io.to(sid).emit("pumpkinTurn",{uses:1});
+    if(pumpkin.isBot){setTimeout(()=>{if(room.game?.phase!=="night"||room.game.nightStep!=="pumpkin"||g.pumpkinUsed)return;const ts=shuffle(getAlivePlayers(g).filter(x=>x.pseudo!==pumpkin.pseudo)).slice(0,2);g.nightActions.pumpkinKills=ts.map(x=>x.pseudo);g.pumpkinUsed=true;pumpkin.role="Villageois";const ps=onlineUsers.get(normalizePseudo(pumpkin.pseudo));if(ps)io.to(ps).emit("yourRole",{role:"Villageois",classChance:pumpkin.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"La Citrouille a utilisé son pouvoir et est devenue Villageois."});startNightStep(room,"seer");},1200);}
+    setTimeout(()=>{if(room.game?.phase==="night"&&room.game.nightStep==="pumpkin"&&!g.pumpkinUsed)startNightStep(room,"seer");},duration); return;
+  }
+  if(step==="giant"){
+    const giant=aliveRole(g,"Géant de pierre"); if(!giant||g.giantUsed)return resolveNight(room);
+    const sid=onlineUsers.get(normalizePseudo(giant.pseudo)); if(sid)io.to(sid).emit("giantTurn",{uses:1});
+    if(giant.isBot){setTimeout(()=>{if(room.game?.phase!=="night"||room.game.nightStep!=="giant"||g.giantUsed)return;const t=randomAliveTarget(g,x=>x.pseudo!==giant.pseudo);if(t)g.nightActions.giantKill=t.pseudo;g.giantUsed=true;giant.role="Villageois";const gs=onlineUsers.get(normalizePseudo(giant.pseudo));if(gs)io.to(gs).emit("yourRole",{role:"Villageois",classChance:giant.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"Le Géant de pierre a utilisé son pouvoir et est devenu Villageois."});resolveNight(room);},1200);}
+    setTimeout(()=>{if(room.game?.phase==="night"&&room.game.nightStep==="giant"&&!g.giantUsed)resolveNight(room);},duration); return;
+  }
+
   if(step==="seer"){
     const seer=aliveRole(g,"Voyante");
     if(!seer)return startNightStep(room,"witch");
@@ -2946,7 +2926,7 @@ function startNightStep(room,step){
 
   if(step==="witch"){
     const witch=aliveRole(g,"Sorcière");
-    if(!witch)return resolveNight(room);
+    if(!witch)return startNightStep(room,"giant");
     const sid=onlineUsers.get(normalizePseudo(witch.pseudo));
     if(sid)io.to(sid).emit("witchTurn",{
       victim:g.nightTargetPseudo,
@@ -2954,16 +2934,18 @@ function startNightStep(room,step){
       canKill:!g.witchKillUsed
     });
     if(witch.isBot){
-      setTimeout(()=>{if(room.game?.phase!=="night"||room.game.nightStep!=="witch")return;resolveNight(room);},12000);
+      setTimeout(()=>{if(room.game?.phase!=="night"||room.game.nightStep!=="witch")return;startNightStep(room,"giant");},12000);
     }
-    setTimeout(()=>{if(room.game?.phase==="night"&&room.game.nightStep==="witch")resolveNight(room);},duration);
+    setTimeout(()=>{if(room.game?.phase==="night"&&room.game.nightStep==="witch")startNightStep(room,"giant");},duration);
   }
 }
+
 
 function finishNightWolves(room){
   const g=room.game;if(!g||g.phase!=="night"||g.nightStep!=="wolves")return;
   const counts={};Object.values(g.nightVotes||{}).forEach(t=>counts[t]=(counts[t]||0)+1);
   g.nightTargetPseudo=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0]||null;
+  if(isV26Released()&&getHalloweenStatus().active&&aliveRole(g,"Citrouille")&&!g.pumpkinUsed)return startNightStep(room,"pumpkin");
   startNightStep(room,"seer");
 }
 
@@ -2973,6 +2955,9 @@ function resolveNight(room){
   if(victim&&g.nightActions?.saved!==victim.pseudo)victim.alive=false;
   const witchKill=g.nightActions?.witchKill;
   if(witchKill){const v=g.players.find(p=>p.pseudo===witchKill&&p.alive);if(v)v.alive=false;}
+  (g.nightActions?.pumpkinKills||[]).forEach(id=>{const v=g.players.find(p=>p.pseudo===id&&p.alive);if(v)v.alive=false;});
+  const giantKill=g.nightActions?.giantKill;
+  if(giantKill){const v=g.players.find(p=>p.pseudo===giantKill&&p.alive);if(v)v.alive=false;}
   const linked=applyLinkedDeaths(g);
   const deaths=g.players.filter(p=>!p.alive).map(p=>p.pseudo);
   g.nightVotes={};
@@ -3041,16 +3026,23 @@ function handleRoleAction(room,data){
     const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("seerResult",{target:target.pseudo,role:target.role});
     g.seerUsedThisNight=true;return startNightStep(room,"witch");
   }
+  if(p.role==="Citrouille"&&g.nightStep==="pumpkin"&&data.action==="pumpkinKill"){if(!isV26Released()||!getHalloweenStatus().active||g.pumpkinUsed)return;const second=g.players.find(x=>x.pseudo===data.secondTargetPseudo&&x.alive&&x.pseudo!==p.pseudo&&x.pseudo!==target?.pseudo);if(!target||!target.alive||target.pseudo===p.pseudo||!second)return;g.nightActions.pumpkinKills=[target.pseudo,second.pseudo];g.pumpkinUsed=true;p.role="Villageois";const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("yourRole",{role:"Villageois",classChance:p.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"La Citrouille a utilisé son pouvoir et est devenue Villageois."});return startNightStep(room,"seer");}
+  if(p.role==="Géant de pierre"&&g.nightStep==="giant"&&data.action==="giantKill"){if(!isV26Released()||g.giantUsed)return;if(!target||!target.alive||target.pseudo===p.pseudo)return;g.nightActions.giantKill=target.pseudo;g.giantUsed=true;p.role="Villageois";const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("yourRole",{role:"Villageois",classChance:p.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"Le Géant de pierre a utilisé son pouvoir et est devenu Villageois."});return resolveNight(room);}
   if(p.role==="Sorcière"&&g.nightStep==="witch"){
-    if(data.action==="save"&&target&&target.pseudo===g.nightTargetPseudo&&!g.witchSaveUsed){g.nightActions.saved=target.pseudo;g.witchSaveUsed=true;io.to(room.code).emit("roleActionResult",{message:"La Sorcière a utilisé sa potion de vie."});return resolveNight(room);}
-    if(data.action==="kill"&&target&&target.alive&&!g.witchKillUsed){g.nightActions.witchKill=target.pseudo;g.witchKillUsed=true;io.to(room.code).emit("roleActionResult",{message:"La Sorcière a utilisé sa potion de mort."});return resolveNight(room);}
-    if(data.action==="pass")return resolveNight(room);
+    if(data.action==="save"&&target&&target.pseudo===g.nightTargetPseudo&&!g.witchSaveUsed){g.nightActions.saved=target.pseudo;g.witchSaveUsed=true;io.to(room.code).emit("roleActionResult",{message:"La Sorcière a utilisé sa potion de vie."});return startNightStep(room,"giant");}
+    if(data.action==="kill"&&target&&target.alive&&!g.witchKillUsed){g.nightActions.witchKill=target.pseudo;g.witchKillUsed=true;io.to(room.code).emit("roleActionResult",{message:"La Sorcière a utilisé sa potion de mort."});return startNightStep(room,"giant");}
+    if(data.action==="pass")return startNightStep(room,"giant");
   }
 }
 
 /* =========================================
    SOCKET.IO
 ========================================= */
+
+const matchmakingQueue=[];let matchmakingTimer=null;
+function removeFromMatchmaking(pseudo){const n=normalizePseudo(pseudo);for(let i=matchmakingQueue.length-1;i>=0;i--)if(normalizePseudo(matchmakingQueue[i].pseudo)===n)matchmakingQueue.splice(i,1);}
+function runRealMatchmaking(){matchmakingTimer=null;if(!isV26Released())return;const groups=[true,false];groups.forEach(ranked=>{const take=matchmakingQueue.filter(x=>Boolean(x.ranked)===ranked).slice(0,8);if(!take.length)return;take.forEach(x=>removeFromMatchmaking(x.pseudo));const room={code:createUniqueRoomCode(),host:take[0].pseudo,ranked,status:"playing",players:take.map(x=>({pseudo:x.pseudo,isBot:false,socketId:x.socketId})),createdAt:Date.now()};addBotsToRoom(room);db.rooms.push(room);take.forEach(x=>{const sock=io.sockets.sockets.get(x.socketId);if(sock)sock.join(room.code);});room.game=createGame(room);saveDatabase();take.forEach(x=>io.to(x.socketId).emit("matchmakingFound",{room:roomPublic(room)}));emitGameStart(room);setTimeout(()=>startNightPhase(room),250);});saveDatabase();}
+function queueRealMatchmaking(socket,pseudo,ranked){removeFromMatchmaking(pseudo);removeUserFromRooms(pseudo);matchmakingQueue.push({pseudo,socketId:socket.id,ranked:Boolean(ranked),queuedAt:Date.now()});socket.emit("playerSearchStarted",{duration:10000,realPlayers:true,queuedCount:matchmakingQueue.length});if(matchmakingQueue.filter(x=>Boolean(x.ranked)===Boolean(ranked)).length>=8)runRealMatchmaking();else if(!matchmakingTimer)matchmakingTimer=setTimeout(runRealMatchmaking,10000);}
 
 io.on(
   "connection",
@@ -3408,6 +3400,7 @@ io.on(
           return;
         }
 
+        if (isV26Released()) { queueRealMatchmaking(socket,pseudo,Boolean(room.ranked)); return; }
         if (normalizePseudo(room.host) !== normalizePseudo(pseudo)) {
           socket.emit("roomError", "Seul le créateur peut lancer la recherche.");
           return;
@@ -3436,6 +3429,12 @@ io.on(
 
         if (!room) {
           socket.emit("roomError", "Salon introuvable.");
+          return;
+        }
+
+        if (isV26Released()) {
+          if(!findUser(pseudo)) return socket.emit("roomError","Compte introuvable.");
+          queueRealMatchmaking(socket,pseudo,Boolean(room.ranked));
           return;
         }
 
@@ -3567,6 +3566,7 @@ g.dayVotes[v.pseudo]=t.pseudo;io.to(room.code).emit("voteUpdate",{voter:v.pseudo
           );
 
         if (pseudo) {
+          removeFromMatchmaking(pseudo);
           onlineUsers.delete(
             normalizePseudo(
               pseudo

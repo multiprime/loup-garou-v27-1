@@ -2271,12 +2271,14 @@ async function loadAdminV8(){
   if(sel)sel.innerHTML=`<option value="">Choisir une classe</option>`+d.classes.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} — ${x.price} 🪙 / ${x.chance}%</option>`).join("");if(selAll)selAll.innerHTML=`<option value="">Aucune classe</option>`+d.classes.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} — ${x.price} 🪙 / ${x.chance}%</option>`).join("");
   if(cc)cc.innerHTML=`<h4>🐺 Classes</h4>`+d.classes.map(x=>`<div class="admin-class-row"><b>${esc(x.name)}</b><span>${x.price} 🪙 • ${x.chance}%</span></div>`).join("");
   renderAdminBoostsV16(d.globalBoosts);
+  renderAdminHalloween(d.halloween);
   if(uc)uc.innerHTML=`<h4>👥 ${d.users.length} joueur(s)</h4>`+d.users.map(u=>`<div class="admin-user-row"><span>${esc(u.icon||"🐺")} ${esc(u.pseudo)}</span><small>🪙${u.coins||0} • ✨${u.xp||0} • 🏆${u.trophies||0} • ${esc(u.rankedRank||"Bois")}</small><button class="secondary-button admin-select-user" data-pseudo="${esc(u.pseudo)}">Sélectionner</button></div>`).join("");uc?.querySelectorAll(".admin-select-user").forEach(b=>b.onclick=()=>{$("adminPlayerSearch").value=b.dataset.pseudo;$ ("adminSearchButton")?.click();});
  }catch(e){$("adminMessage").textContent="❌ "+e.message;}
 }
 $("adminButton")?.addEventListener("click",()=>setTimeout(loadAdminV8,50));
 $("adminRewardType")?.addEventListener("change",()=>{});
 
+function renderAdminHalloween(status){const el=$("adminHalloweenStatus");if(!el)return;if(!status?.active){el.textContent=status?.week?`🎃 Semaine ${status.week} terminée — événement arrêté.`:"🎃 Événement désactivé.";return;}const left=Math.max(0,Number(status.endsAt||0)-Date.now()),d=Math.floor(left/86400000),h=Math.floor(left%86400000/3600000);el.textContent=`🎃 Semaine ${status.week} active • encore ${d}j ${h}h`;}
 function renderAdminBoostsV16(boosts){
   const map={coins:"Coins",xp:"Xp",trophies:"Trophies"};
   const now=Date.now();
@@ -2317,6 +2319,9 @@ document.querySelectorAll(".admin-boost-btn").forEach(btn=>{
     activateAdminBoostV16(wrap.dataset.boostType,Number(btn.dataset.mult));
   });
 });
+
+document.querySelectorAll(".admin-halloween-start").forEach(btn=>btn.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/halloween/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,week:Number(btn.dataset.week)})});$("adminHalloweenMessage").textContent="✅ "+d.message;renderAdminHalloween(d.event);}catch(e){$("adminHalloweenMessage").textContent="❌ "+e.message;}}));
+$("adminHalloweenStop")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/halloween/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});$("adminHalloweenMessage").textContent="✅ "+d.message;renderAdminHalloween(d.event);}catch(e){$("adminHalloweenMessage").textContent="❌ "+e.message;}});
 
 $("adminBloodMoonButton")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/blood-moon/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo})});$("adminBloodMoonMessage").textContent="✅ "+d.message;refreshBloodMoonButton();}catch(e){$("adminBloodMoonMessage").textContent="❌ "+e.message;}});
 socket.on("bloodMoonStatusChanged",()=>{refreshBloodMoonButton();});

@@ -346,6 +346,9 @@ function loginUser(user) {
   currentUser.coins =
     Number(currentUser.coins || 0);
 
+  currentUser.halloweenCandy =
+    Math.max(0, Number(currentUser.halloweenCandy || 0));
+
   currentUser.trophies =
     Number(currentUser.trophies || 0);
 
@@ -438,6 +441,10 @@ function updateProfile() {
   if ($("playerTrophies")) {
     $("playerTrophies").textContent =
       currentUser.trophies || 0;
+  }
+
+  if ($("playerCandy")) {
+    $("playerCandy").textContent = currentUser.halloweenCandy || 0;
   }
 
   const nowBoost=Date.now(), boosts=currentUser.boosts||{};
@@ -1727,6 +1734,7 @@ $("adminGiveButton")
       let coins = 0;
       let xp = 0;
       let trophies = 0;
+      let halloweenCandy = 0;
       let classId = "";
 
       if (rewardType === "coins") {
@@ -1739,6 +1747,10 @@ $("adminGiveButton")
 
       if (rewardType === "trophies") {
         trophies = amount;
+      }
+
+      if (rewardType === "halloweenCandy") {
+        halloweenCandy = amount;
       }
 
       if (rewardType === "level") {
@@ -1793,6 +1805,7 @@ $("adminGiveButton")
                 coins,
                 xp,
                 trophies,
+                halloweenCandy,
                 classId
               })
             }
@@ -2377,11 +2390,18 @@ $("chatEnabledToggle")?.addEventListener("change",async()=>{try{const d=await ap
 async function loadShopV8(){
  const c=$("shopList");if(!c||!currentUser)return;c.textContent="Chargement...";
  try{
-  const d=await apiJson("/api/shop"); const now=Date.now(); const boosts=currentUser.boosts||{};
+  const d=await apiJson("/api/shop"), now=Date.now(), boosts=currentUser.boosts||{};
   const left=id=>Math.max(0,Number(boosts[id+"_until"]||0)-now);
   const label=id=>{const ms=left(id);return ms>0?`<span class="boost-active">✦ X2 actif encore ${Math.ceil(ms/60000)} min</span>`:"";};
-  c.innerHTML=(d.items||[]).map(i=>{const affordable=Number(currentUser.coins||0)>=Number(i.price||0);return `<div class="shop-card"><h3>🛒 ${esc(i.name)}</h3><p>${esc(i.description||"")}</p><p><span class="coin-icon"></span> ${i.price}</p>${i.id!=="blood_quarter"?label(i.id):""}<button class="main-button shop-buy" data-id="${esc(i.id)}" ${affordable?"":"disabled"}>${affordable?"Acheter":"Pas assez de pièces"}</button></div>`;}).join("");
-  c.querySelectorAll(".shop-buy").forEach(b=>b.onclick=async()=>{try{const d=await apiJson("/api/shop/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,itemId:b.dataset.id})});currentUser=d.user;saveCurrentUser();updateProfile();loadShopV8();alert("✅ "+d.message);}catch(e){alert("❌ "+e.message);}});
+  let html=`<h3>🛒 Boutique normale</h3>`;
+  html+=(d.items||[]).map(i=>{const affordable=Number(currentUser.coins||0)>=Number(i.price||0);return `<div class="shop-card"><h3>🛒 ${esc(i.name)}</h3><p>${esc(i.description||"")}</p><p><span class="coin-icon"></span> ${i.price}</p>${i.id!=="blood_quarter"?label(i.id):""}<button class="main-button shop-buy" data-id="${esc(i.id)}" ${affordable?"":"disabled"}>${affordable?"Acheter":"Pas assez de pièces"}</button></div>`;}).join("");
+  if(d.halloween?.active){
+    const h=await apiJson(`/api/halloween/shop?pseudo=${encodeURIComponent(currentUser.pseudo)}`);
+    html+=`<div class="halloween-shop"><h2>🎃 Boutique Halloween — Semaine ${h.week}</h2><p class="halloween-candy-balance">🍬 Bonbons : <b>${h.candy}</b></p><p>Les bonbons se gagnent pendant les parties Halloween : 10 en jouant, 25 en gagnant.</p><div class="cards-list">${(h.items||[]).map(i=>{const ok=Number(h.candy||0)>=Number(i.price||0);return `<div class="shop-card halloween-shop-card"><h3>🎃 ${esc(i.name)}</h3><p>${esc(i.description)}</p><p>🍬 <b>${i.price}</b> bonbons</p><button class="main-button halloween-buy" data-id="${esc(i.id)}" ${ok?"":"disabled"}>${ok?"Échanger":"Pas assez de bonbons"}</button></div>`;}).join("")}</div></div>`;
+  } else { html+=`<div class="halloween-shop halloween-shop-closed"><h2>🎃 Boutique Halloween</h2><p>La boutique sera disponible quand l'admin lancera une semaine Halloween.</p><p>🍬 Bonbons : ${currentUser.halloweenCandy||0}</p></div>`; }
+  c.innerHTML=html;
+  c.querySelectorAll(".shop-buy").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/shop/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,itemId:b.dataset.id})});currentUser=x.user;saveCurrentUser();updateProfile();loadShopV8();alert("✅ "+x.message);}catch(e){alert("❌ "+e.message);}});
+  c.querySelectorAll(".halloween-buy").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/halloween/shop/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,itemId:b.dataset.id})});currentUser=x.user;saveCurrentUser();updateProfile();loadShopV8();alert("🍬 "+x.message);}catch(e){alert("❌ "+e.message);}});
  }catch(e){c.textContent="❌ "+e.message;}
 }
 async function loadBloodMoonV8(){const c=$("bloodMoonContent");if(!c||!currentUser)return;c.textContent="Chargement...";try{const d=await apiJson(`/api/blood-moon?pseudo=${encodeURIComponent(currentUser.pseudo)}`);updateBloodMoonTimer(d.event);if(!d.event.active){c.innerHTML="<h3>🌑 L'événement est fermé.</h3><p>Il revient vendredi de 07h00 à 20h00.</p>";return;}const p=d.progress;c.innerHTML=`<div class="blood-moon-event"><div class="blood-ladder"><div class="blood-rung">🌕 100 🪙</div><div class="blood-rung">🌕 200 XP</div><div class="blood-rung">🌕 500 XP</div><div class="blood-rung final">🌕 ${esc(p.title)} — titre exclusif</div></div><div class="blood-gauge"><div class="blood-gauge-fill" style="height:${p.quarters*25}%"></div><strong>${p.quarters}/4</strong></div></div><h3>Quêtes spéciales</h3><div class="cards-list">${(p.quests||[]).map(q=>`<div class="quest-card"><h3>${esc(q.title)}</h3><p>${esc(q.description)}</p><p>${q.progress}/${q.target}</p>${q.completed&&!q.claimed?`<button class="main-button bm-q" data-id="${esc(q.id)}">🌕 Gagner un quart</button>`:""}</div>`).join("")}</div><p>Quarts : ${p.quarters}/4</p><div class="bm-rewards">${(p.milestones||[]).map(m=>`<div class="blood-rung"><b>Palier ${m.quarter}/4</b><br>${m.reward.coins?`<span class="coin-icon"></span> ${m.reward.coins} pièces`:m.reward.xp?`✨ ${m.reward.xp} XP`:`🏷️ ${esc(m.reward.title)}`} ${p.quarters>=m.quarter&&!(p.claimed||[]).includes(m.quarter)?`<button class="main-button bm-claim" data-quarter="${m.quarter}">Récupérer</button>`:((p.claimed||[]).includes(m.quarter)?"✅ Récupéré":"🔒")}</div>`).join("")}</div><p>Bonus événement : x2 pièces • x2 XP • x2 trophées</p><h3>🏷️ Tes titres</h3><div class="title-list">${(currentUser.titles||[]).map(t=>`<button class="secondary-button title-equip" data-title="${esc(t)}">${esc(t)}${currentUser.equippedTitle===t?" ✓":""}</button>`).join("")}</div>`;c.querySelectorAll(".title-equip").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/titles/equip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,title:b.dataset.title})});currentUser=x.user;saveCurrentUser();updateProfile();loadBloodMoonV8();}catch(e){alert("❌ "+e.message);}});c.querySelectorAll(".bm-claim").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/blood-moon/claim",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,quarter:Number(b.dataset.quarter)})});currentUser=x.user;saveCurrentUser();updateProfile();loadBloodMoonV8();}catch(e){alert("❌ "+e.message);}});c.querySelectorAll(".bm-q").forEach(b=>b.onclick=async()=>{try{await apiJson("/api/blood-moon/quest-claim",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,questId:b.dataset.id})});loadBloodMoonV8();}catch(e){alert("❌ "+e.message);}});}catch(e){c.textContent="❌ "+e.message;}}

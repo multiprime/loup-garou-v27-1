@@ -72,6 +72,7 @@ function defaultDatabase() {
     bloodMoonProgress: {},
     bloodMoonManualUntil: 0,
     halloweenEvent: { active: false, week: 0, startedAt: 0, endsAt: 0 },
+    halloweenCandyClearedAt: 0,
     halloweenShopSeason: 0,
     v26Release: { active: false, version: 25, updatedAt: 0 },
     classDiscount: { percent: 0, until: 0 },
@@ -90,6 +91,7 @@ function mergeDatabase(database) {
   merged.halloweenEvent = { ...defaultDatabase().halloweenEvent, ...(database?.halloweenEvent || {}) };
   merged.v26Release = { ...defaultDatabase().v26Release, ...(database?.v26Release || {}) };
   merged.classDiscount = { ...defaultDatabase().classDiscount, ...(database?.classDiscount || {}) };
+  merged.halloweenCandyClearedAt = Number(database?.halloweenCandyClearedAt || 0);
   merged.halloweenShopSeason = Number(database?.halloweenShopSeason || 0);
   ["coins", "xp", "trophies"].forEach(type => {
     merged.globalBoosts[type] = {
@@ -143,14 +145,33 @@ if (process.env.DATABASE_URL) {
   });
 }
 
+function expireHalloweenIfNeeded() {
+  const e=db.halloweenEvent||{}, now=Date.now();
+  if(!e.active || ![1,2,3,4].includes(Number(e.week)) || Number(e.endsAt||0)>now) return false;
+  const week=Number(e.week);
+  db.halloweenEvent={...e,active:false};
+  // Les bonbons sont une monnaie TEMPORAIRE : ils sont conservés entre les semaines 1-3
+  // et supprimés uniquement lorsque la semaine 4 arrive à son terme (fin complète d'Halloween).
+  if(week===4 && Number(db.halloweenCandyClearedAt||0)!==Number(e.endsAt||0)){
+    let changed=false;
+    (db.users||[]).forEach(user=>{
+      if(Number(user.halloweenCandy||0)!==0){user.halloweenCandy=0;changed=true;}
+    });
+    db.halloweenCandyClearedAt=Number(e.endsAt||now);
+    if(changed) console.log('[Halloween] Fin de l’événement : bonbons réinitialisés pour tous les joueurs.');
+  }
+  saveDatabase();
+  return true;
+}
 function getHalloweenStatus() {
+  expireHalloweenIfNeeded();
   const e=db.halloweenEvent||{}, now=Date.now();
   const active=Boolean(e.active)&&[1,2,3,4].includes(Number(e.week))&&Number(e.endsAt)>now;
-  if(e.active&&!active){db.halloweenEvent={...e,active:false};saveDatabase();}
   return {active,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:active?Number(e.endsAt):null};
 }
 function startHalloweenWeek(week){const w=Number(week);if(![1,2,3,4].includes(w))throw new Error('Semaine Halloween invalide.');const startedAt=Date.now();db.halloweenEvent={active:true,week:w,startedAt,endsAt:startedAt+7*24*60*60*1000};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
+setInterval(()=>{ if(expireHalloweenIfNeeded()){ io.emit('halloweenStatusChanged',getHalloweenStatus()); } },60000);
 function isV26Released(){ return Boolean(db.v26Release?.active && Number(db.v26Release?.version||0)>=26); }
 function getClassDiscountPercent(){ const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
 function getClassPrice(classe){ const pct=getClassDiscountPercent(); return Math.max(0,Math.floor(Number(classe?.price||0)*(1-pct/100))); }

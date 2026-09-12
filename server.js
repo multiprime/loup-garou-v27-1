@@ -145,21 +145,20 @@ if (process.env.DATABASE_URL) {
   });
 }
 
+function clearHalloweenCandy(reason="Événement Halloween inactif") {
+  let changed=false;
+  (db.users||[]).forEach(user=>{
+    if(Number(user.halloweenCandy||0)!==0){ user.halloweenCandy=0; changed=true; }
+  });
+  if(changed) console.log(`[Halloween] ${reason} : bonbons réinitialisés pour tous les joueurs.`);
+  db.halloweenCandyClearedAt=Date.now();
+  return changed;
+}
 function expireHalloweenIfNeeded() {
   const e=db.halloweenEvent||{}, now=Date.now();
   if(!e.active || ![1,2,3,4].includes(Number(e.week)) || Number(e.endsAt||0)>now) return false;
-  const week=Number(e.week);
   db.halloweenEvent={...e,active:false};
-  // Les bonbons sont une monnaie TEMPORAIRE : ils sont conservés entre les semaines 1-3
-  // et supprimés uniquement lorsque la semaine 4 arrive à son terme (fin complète d'Halloween).
-  if(week===4 && Number(db.halloweenCandyClearedAt||0)!==Number(e.endsAt||0)){
-    let changed=false;
-    (db.users||[]).forEach(user=>{
-      if(Number(user.halloweenCandy||0)!==0){user.halloweenCandy=0;changed=true;}
-    });
-    db.halloweenCandyClearedAt=Number(e.endsAt||now);
-    if(changed) console.log('[Halloween] Fin de l’événement : bonbons réinitialisés pour tous les joueurs.');
-  }
+  clearHalloweenCandy("Semaine Halloween terminée");
   saveDatabase();
   return true;
 }
@@ -167,10 +166,15 @@ function getHalloweenStatus() {
   expireHalloweenIfNeeded();
   const e=db.halloweenEvent||{}, now=Date.now();
   const active=Boolean(e.active)&&[1,2,3,4].includes(Number(e.week))&&Number(e.endsAt)>now;
+  // Sécurité : aucune monnaie Halloween ne doit rester utilisable hors événement.
+  if(!active && (db.users||[]).some(u=>Number(u.halloweenCandy||0)!==0)){
+    clearHalloweenCandy();
+    saveDatabase();
+  }
   return {active,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:active?Number(e.endsAt):null};
 }
 function startHalloweenWeek(week){const w=Number(week);if(![1,2,3,4].includes(w))throw new Error('Semaine Halloween invalide.');const startedAt=Date.now();db.halloweenEvent={active:true,week:w,startedAt,endsAt:startedAt+7*24*60*60*1000};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
-function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
+function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};clearHalloweenCandy("Arrêt manuel");saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 setInterval(()=>{ if(expireHalloweenIfNeeded()){ io.emit('halloweenStatusChanged',getHalloweenStatus()); } },60000);
 function isV26Released(){ return Boolean(db.v26Release?.active && Number(db.v26Release?.version||0)>=26); }
 function getClassDiscountPercent(){ const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
@@ -280,6 +284,11 @@ function findUser(pseudo) {
   );
 }
 
+function getHalloweenStatusForPublic() {
+  const e = db.halloweenEvent || {};
+  return Boolean(e.active && [1,2,3,4].includes(Number(e.week)) && Number(e.endsAt || 0) > Date.now());
+}
+
 function publicUser(user) {
   if (!user) return null;
 
@@ -288,6 +297,8 @@ function publicUser(user) {
     ...safeUser
   } = user;
 
+  // Les bonbons sont une monnaie temporaire : ils ne sont jamais exposés hors Halloween.
+  if (!getHalloweenStatusForPublic()) safeUser.halloweenCandy = 0;
   return safeUser;
 }
 
@@ -2649,7 +2660,7 @@ app.get("/api/halloween/shop",(req,res)=>{
   const st=getHalloweenStatus();
   if(!u)return res.status(404).json({message:"Utilisateur introuvable."});
   ensureUserState(u);
-  if(!st.active)return res.json({active:false,candy:u.halloweenCandy||0,items:[]});
+  if(!st.active){ if(Number(u.halloweenCandy||0)!==0){u.halloweenCandy=0;saveDatabase();} return res.json({active:false,candy:0,items:[]}); }
   res.json({active:true,week:st.week,candy:Number(u.halloweenCandy||0),items:HALLOWEEN_SHOP_ITEMS});
 });
 app.post("/api/halloween/shop/buy",(req,res)=>{
@@ -3151,7 +3162,7 @@ function handleRoleAction(room,data){
 
 const matchmakingQueue=[];let matchmakingTimer=null;
 function removeFromMatchmaking(pseudo){const n=normalizePseudo(pseudo);for(let i=matchmakingQueue.length-1;i>=0;i--)if(normalizePseudo(matchmakingQueue[i].pseudo)===n)matchmakingQueue.splice(i,1);}
-function runRealMatchmaking(){matchmakingTimer=null;if(!isV26Released())return;const groups=[true,false];groups.forEach(ranked=>{const take=matchmakingQueue.filter(x=>Boolean(x.ranked)===ranked).slice(0,8);if(!take.length)return;take.forEach(x=>removeFromMatchmaking(x.pseudo));const room={code:createUniqueRoomCode(),host:take[0].pseudo,ranked,status:"playing",players:take.map(x=>({pseudo:x.pseudo,isBot:false,socketId:x.socketId})),createdAt:Date.now()};addBotsToRoom(room);db.rooms.push(room);take.forEach(x=>{const sock=io.sockets.sockets.get(x.socketId);if(sock)sock.join(room.code);});room.game=createGame(room);saveDatabase();take.forEach(x=>io.to(x.socketId).emit("matchmakingFound",{room:roomPublic(room)}));emitGameStart(room);setTimeout(()=>startNightPhase(room),250);});saveDatabase();}
+function runRealMatchmaking(){matchmakingTimer=null;const groups=[true,false];groups.forEach(ranked=>{const take=matchmakingQueue.filter(x=>Boolean(x.ranked)===ranked).slice(0,8);if(!take.length)return;take.forEach(x=>removeFromMatchmaking(x.pseudo));const room={code:createUniqueRoomCode(),host:take[0].pseudo,ranked,status:"playing",players:take.map(x=>({pseudo:x.pseudo,isBot:false,socketId:x.socketId})),createdAt:Date.now()};addBotsToRoom(room);db.rooms.push(room);take.forEach(x=>{const sock=io.sockets.sockets.get(x.socketId);if(sock)sock.join(room.code);});room.game=createGame(room);saveDatabase();take.forEach(x=>io.to(x.socketId).emit("matchmakingFound",{room:roomPublic(room)}));emitGameStart(room);setTimeout(()=>startNightPhase(room),250);});saveDatabase();}
 function queueRealMatchmaking(socket,pseudo,ranked){removeFromMatchmaking(pseudo);removeUserFromRooms(pseudo);matchmakingQueue.push({pseudo,socketId:socket.id,ranked:Boolean(ranked),queuedAt:Date.now()});socket.emit("playerSearchStarted",{duration:10000,realPlayers:true,queuedCount:matchmakingQueue.length});if(matchmakingQueue.filter(x=>Boolean(x.ranked)===Boolean(ranked)).length>=8)runRealMatchmaking();else if(!matchmakingTimer)matchmakingTimer=setTimeout(runRealMatchmaking,10000);}
 
 io.on(
@@ -3510,7 +3521,7 @@ io.on(
           return;
         }
 
-        if (isV26Released()) { queueRealMatchmaking(socket,pseudo,Boolean(room.ranked)); return; }
+        queueRealMatchmaking(socket,pseudo,Boolean(room.ranked)); return;
         if (normalizePseudo(room.host) !== normalizePseudo(pseudo)) {
           socket.emit("roomError", "Seul le créateur peut lancer la recherche.");
           return;
@@ -3542,11 +3553,9 @@ io.on(
           return;
         }
 
-        if (isV26Released()) {
-          if(!findUser(pseudo)) return socket.emit("roomError","Compte introuvable.");
-          queueRealMatchmaking(socket,pseudo,Boolean(room.ranked));
-          return;
-        }
+        if(!findUser(pseudo)) return socket.emit("roomError","Compte introuvable.");
+        queueRealMatchmaking(socket,pseudo,Boolean(room.ranked));
+        return;
 
         if (normalizePseudo(room.host) !== normalizePseudo(pseudo)) {
           socket.emit("roomError", "Seul le créateur peut lancer la partie.");

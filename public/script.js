@@ -1048,13 +1048,10 @@ $("startGameButton")?.addEventListener(
     }
 
     socket.emit(
-      "startGame",
+      "searchPlayers",
       {
-        code:
-          currentRoomCode,
-
-        pseudo:
-          currentUser.pseudo
+        code: currentRoomCode,
+        pseudo: currentUser.pseudo
       }
     );
   }
@@ -2398,7 +2395,7 @@ async function loadShopV8(){
   if(d.halloween?.active){
     const h=await apiJson(`/api/halloween/shop?pseudo=${encodeURIComponent(currentUser.pseudo)}`);
     html+=`<div class="halloween-shop"><h2>🎃 Boutique Halloween — Semaine ${h.week}</h2><p class="halloween-candy-balance">🍬 Bonbons : <b>${h.candy}</b></p><p>Les bonbons se gagnent pendant les parties Halloween : 10 en jouant, 25 en gagnant.</p><div class="cards-list">${(h.items||[]).map(i=>{const ok=Number(h.candy||0)>=Number(i.price||0);return `<div class="shop-card halloween-shop-card"><h3>🎃 ${esc(i.name)}</h3><p>${esc(i.description)}</p><p>🍬 <b>${i.price}</b> bonbons</p><button class="main-button halloween-buy" data-id="${esc(i.id)}" ${ok?"":"disabled"}>${ok?"Échanger":"Pas assez de bonbons"}</button></div>`;}).join("")}</div></div>`;
-  } else { html+=`<div class="halloween-shop halloween-shop-closed"><h2>🎃 Boutique Halloween</h2><p>La boutique sera disponible quand l'admin lancera une semaine Halloween.</p><p>🍬 Bonbons : ${currentUser.halloweenCandy||0}</p></div>`; }
+  }
   c.innerHTML=html;
   c.querySelectorAll(".shop-buy").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/shop/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,itemId:b.dataset.id})});currentUser=x.user;saveCurrentUser();updateProfile();loadShopV8();alert("✅ "+x.message);}catch(e){alert("❌ "+e.message);}});
   c.querySelectorAll(".halloween-buy").forEach(b=>b.onclick=async()=>{try{const x=await apiJson("/api/halloween/shop/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pseudo:currentUser.pseudo,itemId:b.dataset.id})});currentUser=x.user;saveCurrentUser();updateProfile();loadShopV8();alert("🍬 "+x.message);}catch(e){alert("❌ "+e.message);}});
@@ -2509,7 +2506,7 @@ $("rankedModeToggle")?.addEventListener("change",()=>{if(currentRoomCode&&isRoom
 /* Connexion : initialisation V8 */
 const _loginUserV8=loginUser;
 loginUser=function(user){_loginUserV8(user);ensureV8AfterLogin();};
-async function loadV26Release(){try{const d=await apiJson("/api/release");v26ReleaseActive=Boolean(d.v26Release?.active);const h=await apiJson("/api/halloween");halloweenActive=Boolean(h.event?.active);}catch(_){v26ReleaseActive=false;halloweenActive=false;}}
+async function loadV26Release(){try{const d=await apiJson("/api/release");v26ReleaseActive=Boolean(d.v26Release?.active);const h=await apiJson("/api/halloween");halloweenActive=Boolean(h.event?.active);syncHalloweenCandy(halloweenActive);syncHalloweenMusic(halloweenActive);}catch(_){v26ReleaseActive=false;halloweenActive=false;syncHalloweenCandy(false);syncHalloweenMusic(false);}}
 
 function ensureV8AfterLogin(){loadV26Release();if($("chatEnabledToggle"))$("chatEnabledToggle").checked=currentUser.chatEnabled!==false;loadNotificationsV8();refreshBloodMoonButton();if(isAdmin())loadAdminV8();}
 window.addEventListener("load",()=>setTimeout(ensureV8AfterLogin,250));
@@ -2552,7 +2549,36 @@ function renderGlobalBoostsV19(payload){
   box.classList.toggle("hidden",!active.length);
 }
 
-socket.on("halloweenStatusChanged",d=>{halloweenActive=Boolean(d?.active);loadClasses();});
+function syncHalloweenCandy(active){
+  const stat=document.querySelector(".candy-stat");
+  if(stat) stat.classList.toggle("hidden",!active);
+  if(!active && currentUser && Number(currentUser.halloweenCandy||0)!==0){
+    currentUser.halloweenCandy=0;
+    saveCurrentUser();
+  }
+}
+
+function syncHalloweenMusic(active){
+  const box=$("halloweenMusicBox"), audio=$("halloweenMusic"), btn=$("halloweenMusicToggle");
+  if(!box||!audio)return;
+  box.classList.toggle("hidden",!active);
+  if(!active){ audio.pause(); audio.currentTime=0; if(btn)btn.textContent="🎃 Musique Halloween : activée"; return; }
+  const tryPlay=()=>{ if(!halloweenActive)return; audio.volume=0.28; audio.play().catch(()=>{}); };
+  tryPlay();
+  if(!box.dataset.unlockBound){
+    box.dataset.unlockBound="1";
+    document.addEventListener("click",()=>{if(halloweenActive)tryPlay();},{passive:true});
+    btn?.addEventListener("click",()=>{ if(audio.paused){audio.play().catch(()=>{});if(btn)btn.textContent="🎃 Musique Halloween : activée";}else{audio.pause();if(btn)btn.textContent="🎃 Musique Halloween : désactivée";} });
+  }
+}
+socket.on("halloweenStatusChanged",d=>{
+  halloweenActive=Boolean(d?.active);
+  syncHalloweenCandy(halloweenActive);
+  if(!halloweenActive&&currentUser){currentUser.halloweenCandy=0;updateProfile();}
+  loadClasses();
+  syncHalloweenMusic(halloweenActive);
+  if($("shopList"))loadShopV8();
+});
 socket.on("v26Released",d=>{v26ReleaseActive=Boolean(d?.active);if(isAdmin())loadAdminV8();loadClasses();});
 socket.on("classDiscountUpdated",d=>{if(isAdmin())loadAdminV8();loadClasses();});
 socket.on("globalBoostUpdated",d=>{

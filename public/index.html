@@ -234,7 +234,7 @@
           <b id="playerTrophies">0</b>
         </span>
 
-        <span class="candy-stat" title="Bonbons Halloween">
+        <span class="candy-stat hidden" title="Bonbons Halloween">
           🍬
           <b id="playerCandy">0</b>
         </span>
@@ -960,6 +960,14 @@
 
   </section>
 
+
+  <!-- 🎃 MUSIQUE HALLOWEEN — activée uniquement pendant l’événement -->
+  <div id="halloweenMusicBox" class="halloween-music-box hidden" aria-live="polite">
+    <button type="button" id="halloweenMusicToggle" class="secondary-button">🎃 Musique Halloween : activée</button>
+    <audio id="halloweenMusic" loop preload="auto">
+      <source src="/halloween-theme.wav" type="audio/wav">
+    </audio>
+  </div>
 
   <!-- =====================================
        TIMER LUNE DE SANG

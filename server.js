@@ -152,9 +152,9 @@ function getHalloweenStatus() {
 function startHalloweenWeek(week){const w=Number(week);if(![1,2,3,4].includes(w))throw new Error('Semaine Halloween invalide.');const startedAt=Date.now();db.halloweenEvent={active:true,week:w,startedAt,endsAt:startedAt+7*24*60*60*1000};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={active:false,week:Number(e.week||0),startedAt:Number(e.startedAt||0),endsAt:Number(e.endsAt||0)};saveDatabase();const status=getHalloweenStatus();io.emit('halloweenStatusChanged',status);return status;}
 function isV26Released(){ return Boolean(db.v26Release?.active && Number(db.v26Release?.version||0)>=26); }
-function getClassDiscountPercent(){ if(!isV26Released()) return 0; const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
+function getClassDiscountPercent(){ const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
 function getClassPrice(classe){ const pct=getClassDiscountPercent(); return Math.max(0,Math.floor(Number(classe?.price||0)*(1-pct/100))); }
-function getPublicClasses(){ return CLASSES.filter(c=>c.id!=="pumpkin1" || (isV26Released() && getHalloweenStatus().active)); }
+function getPublicClasses(){ return CLASSES.filter(c=>c.id!=="pumpkin1" || getHalloweenStatus().active); }
 function releaseV26(){ db.v26Release={active:true,version:26,updatedAt:Date.now()}; saveDatabase(); const payload={...db.v26Release}; io.emit("v26Released",payload); return payload; }
 function setClassDiscount(percent,durationMinutes){ const pct=Math.max(0,Math.min(90,Number(percent||0))); db.classDiscount=pct?{percent:pct,until:Date.now()+Math.max(1,Math.min(1440,Number(durationMinutes||10)))*60000}:{percent:0,until:0}; saveDatabase(); const out={percent:getClassDiscountPercent(),until:db.classDiscount.until}; io.emit("classDiscountUpdated",out); return out; }
 
@@ -974,12 +974,14 @@ function classCanGrantRole(classId, role) {
 function getClassRole(classId){ return ({wolf1:"Loup-Garou",wolf2:"Loup-Garou",seer1:"Voyante",witch1:"Sorcière",cupid1:"Cupidon",pumpkin1:"Citrouille"})[classId]||null; }
 function assignRolesForGame(players){
   const released=isV26Released();
-  const halloween=released&&getHalloweenStatus().active;
-  const rolePool=!released
-    ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Villageois","Villageois","Villageois"]
-    : halloween
+  const halloween=getHalloweenStatus().active;
+  const rolePool=halloween
+    ? (released
       ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Citrouille","Villageois"]
-      : ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Villageois","Villageois"];
+      : ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Citrouille","Villageois","Villageois"])
+    : released
+      ? ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Géant de pierre","Villageois","Villageois"]
+      : ["Loup-Garou","Loup-Garou","Voyante","Sorcière","Cupidon","Villageois","Villageois","Villageois"];
   const assignments=new Map(),slots={};
   rolePool.forEach(r=>slots[r]=(slots[r]||0)+1);
   const pumpkinDenied=new Set();
@@ -1118,7 +1120,7 @@ const HALLOWEEN_SHOP_ITEMS = [
   {id:"halloween_trophy", name:"Trophée maudit", price:400, description:"Échange 400 bonbons contre 3 trophées."}
 ];
 function halloweenSeasonKey(){ return Number(db.halloweenEvent?.week||0)>0 ? Number(db.halloweenEvent.week) : 0; }
-function awardHalloweenCandy(user, amount){ if(!user)return 0; const st=getHalloweenStatus(); if(!st.active || !isV26Released())return 0; const n=Math.max(0,Math.floor(Number(amount||0))); user.halloweenCandy=Math.max(0,Number(user.halloweenCandy||0)+n); return n; }
+function awardHalloweenCandy(user, amount){ if(!user)return 0; const st=getHalloweenStatus(); if(!st.active)return 0; const n=Math.max(0,Math.floor(Number(amount||0))); user.halloweenCandy=Math.max(0,Number(user.halloweenCandy||0)+n); return n; }
 
 function finishGame(room) {
   const game=room.game; if(!game || game.phase==="finished") return;
@@ -2619,21 +2621,21 @@ app.get("/api/shop",(req,res)=>{
   const items=[...SHOP_ITEMS];
   if(st.active)items.push({id:"blood_quarter",name:"Quart de Lune de Sang",price:500,description:"Ajoute un quart à ta progression de Lune de Sang."});
   const halloween=getHalloweenStatus();
-  res.json({items,halloween:{active:Boolean(isV26Released()&&halloween.active),week:halloween.week,candy:0,shopItems:HALLOWEEN_SHOP_ITEMS}});
+  res.json({items,halloween:{active:Boolean(halloween.active),week:halloween.week,candy:0,shopItems:HALLOWEEN_SHOP_ITEMS}});
 });
 app.get("/api/halloween/shop",(req,res)=>{
   const u=findUser(req.query.pseudo);
   const st=getHalloweenStatus();
   if(!u)return res.status(404).json({message:"Utilisateur introuvable."});
   ensureUserState(u);
-  if(!isV26Released()||!st.active)return res.json({active:false,candy:u.halloweenCandy||0,items:[]});
+  if(!st.active)return res.json({active:false,candy:u.halloweenCandy||0,items:[]});
   res.json({active:true,week:st.week,candy:Number(u.halloweenCandy||0),items:HALLOWEEN_SHOP_ITEMS});
 });
 app.post("/api/halloween/shop/buy",(req,res)=>{
   const u=findUser(req.body.pseudo);
   const st=getHalloweenStatus();
   if(!u)return res.status(404).json({message:"Utilisateur introuvable."});
-  if(!isV26Released()||!st.active)return res.status(400).json({message:"La boutique Halloween est fermée."});
+  if(!st.active)return res.status(400).json({message:"La boutique Halloween est fermée."});
   ensureUserState(u);
   const item=HALLOWEEN_SHOP_ITEMS.find(x=>x.id===req.body.itemId);
   if(!item)return res.status(404).json({message:"Article Halloween introuvable."});
@@ -3032,7 +3034,7 @@ function finishNightWolves(room){
   const g=room.game;if(!g||g.phase!=="night"||g.nightStep!=="wolves")return;
   const counts={};Object.values(g.nightVotes||{}).forEach(t=>counts[t]=(counts[t]||0)+1);
   g.nightTargetPseudo=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0]||null;
-  if(isV26Released()&&getHalloweenStatus().active&&aliveRole(g,"Citrouille")&&!g.pumpkinUsed)return startNightStep(room,"pumpkin");
+  if(getHalloweenStatus().active&&aliveRole(g,"Citrouille")&&!g.pumpkinUsed)return startNightStep(room,"pumpkin");
   startNightStep(room,"seer");
 }
 
@@ -3113,7 +3115,7 @@ function handleRoleAction(room,data){
     const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("seerResult",{target:target.pseudo,role:target.role});
     g.seerUsedThisNight=true;return startNightStep(room,"witch");
   }
-  if(p.role==="Citrouille"&&g.nightStep==="pumpkin"&&data.action==="pumpkinKill"){if(!isV26Released()||!getHalloweenStatus().active||g.pumpkinUsed)return;const second=g.players.find(x=>x.pseudo===data.secondTargetPseudo&&x.alive&&x.pseudo!==p.pseudo&&x.pseudo!==target?.pseudo);if(!target||!target.alive||target.pseudo===p.pseudo||!second)return;g.nightActions.pumpkinKills=[target.pseudo,second.pseudo];g.pumpkinUsed=true;p.role="Villageois";const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("yourRole",{role:"Villageois",classChance:p.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"La Citrouille a utilisé son pouvoir et est devenue Villageois."});return startNightStep(room,"seer");}
+  if(p.role==="Citrouille"&&g.nightStep==="pumpkin"&&data.action==="pumpkinKill"){if(!getHalloweenStatus().active||g.pumpkinUsed)return;const second=g.players.find(x=>x.pseudo===data.secondTargetPseudo&&x.alive&&x.pseudo!==p.pseudo&&x.pseudo!==target?.pseudo);if(!target||!target.alive||target.pseudo===p.pseudo||!second)return;g.nightActions.pumpkinKills=[target.pseudo,second.pseudo];g.pumpkinUsed=true;p.role="Villageois";const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("yourRole",{role:"Villageois",classChance:p.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"La Citrouille a utilisé son pouvoir et est devenue Villageois."});return startNightStep(room,"seer");}
   if(p.role==="Géant de pierre"&&g.nightStep==="giant"&&data.action==="giantKill"){if(!isV26Released()||g.giantUsed)return;if(!target||!target.alive||target.pseudo===p.pseudo)return;g.nightActions.giantKill=target.pseudo;g.giantUsed=true;p.role="Villageois";const sid=onlineUsers.get(normalizePseudo(p.pseudo));if(sid)io.to(sid).emit("yourRole",{role:"Villageois",classChance:p.classChance,teammates:[]});io.to(room.code).emit("roleActionResult",{message:"Le Géant de pierre a utilisé son pouvoir et est devenu Villageois."});return resolveNight(room);}
   if(p.role==="Sorcière"&&g.nightStep==="witch"){
     if(data.action==="save"&&target&&target.pseudo===g.nightTargetPseudo&&!g.witchSaveUsed){g.nightActions.saved=target.pseudo;g.witchSaveUsed=true;io.to(room.code).emit("roleActionResult",{message:"La Sorcière a utilisé sa potion de vie."});return startNightStep(room,"giant");}

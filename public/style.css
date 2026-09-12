@@ -1242,3 +1242,9 @@ body.in-game .v19-game { max-width:1180px; min-height:calc(100vh - 20px); margin
 .halloween-candy-balance{font-size:1.15rem}
 .halloween-shop-card{border-color:rgba(255,140,0,.3)}
 .halloween-shop-closed{opacity:.8}
+
+.halloween-music-box{position:fixed;right:18px;bottom:18px;z-index:9999;backdrop-filter:blur(8px)}
+.halloween-music-box.hidden{display:none}
+
+/* Halloween : la monnaie et son emoji sont totalement invisibles hors événement. */
+.candy-stat.hidden { display: none !important; }

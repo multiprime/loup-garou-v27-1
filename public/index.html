@@ -241,6 +241,7 @@
 
       </div>
       <div id="activeBoosts" class="active-boosts hidden" aria-live="polite"></div>
+      <div id="activePersonalEvents" class="active-boosts hidden" aria-live="polite"></div>
       <div id="globalBoostBanner" class="global-boost-banner hidden" aria-live="polite"></div>
 
     </header>
@@ -828,6 +829,25 @@
 
       </div>
 
+
+      <div class="admin-card admin-personal-event-card">
+        <h3>⚡ Donner un événement à un joueur</h3>
+        <p>Choisis un joueur recherché ci-dessus et offre-lui un événement pendant <strong>10 minutes</strong>.</p>
+        <select id="adminPersonalEventSelect">
+          <option value="">Choisir un événement</option>
+          <option value="halloween">🎃 Halloween</option>
+          <option value="bloodmoon">🌕 Lune de Sang</option>
+          <option value="double_coins">🪙 x2 Pièces</option>
+          <option value="double_xp">✨ x2 XP</option>
+          <option value="double_trophies">🏆 x2 Trophées</option>
+          <option value="discount_10">🎟️ Réduction classes -10%</option>
+          <option value="discount_25">🎟️ Réduction classes -25%</option>
+          <option value="discount_50">🎟️ Réduction classes -50%</option>
+          <option value="discount_75">🎟️ Réduction classes -75%</option>
+        </select>
+        <button id="adminGivePersonalEventButton" type="button" class="main-button">⚡ Donner l'événement pendant 10 min</button>
+        <p id="adminPersonalEventMessage"></p>
+      </div>
 
       <div class="admin-card">
         <h3>🌐 Récompenser tous les joueurs</h3>

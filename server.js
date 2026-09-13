@@ -76,6 +76,7 @@ function defaultDatabase() {
     halloweenShopSeason: 0,
     v26Release: { active: false, version: 25, updatedAt: 0 },
     classDiscount: { percent: 0, until: 0 },
+    personalEvents: {},
     globalBoosts: {
       coins: { multiplier: 1, until: 0 },
       xp: { multiplier: 1, until: 0 },
@@ -91,6 +92,7 @@ function mergeDatabase(database) {
   merged.halloweenEvent = { ...defaultDatabase().halloweenEvent, ...(database?.halloweenEvent || {}) };
   merged.v26Release = { ...defaultDatabase().v26Release, ...(database?.v26Release || {}) };
   merged.classDiscount = { ...defaultDatabase().classDiscount, ...(database?.classDiscount || {}) };
+  merged.personalEvents = (database?.personalEvents && typeof database.personalEvents === "object") ? database.personalEvents : {};
   merged.halloweenCandyClearedAt = Number(database?.halloweenCandyClearedAt || 0);
   merged.halloweenShopSeason = Number(database?.halloweenShopSeason || 0);
   ["coins", "xp", "trophies"].forEach(type => {
@@ -178,10 +180,48 @@ function stopHalloweenEvent(){const e=db.halloweenEvent||{};db.halloweenEvent={a
 setInterval(()=>{ if(expireHalloweenIfNeeded()){ io.emit('halloweenStatusChanged',getHalloweenStatus()); } },60000);
 function isV26Released(){ return Boolean(db.v26Release?.active && Number(db.v26Release?.version||0)>=26); }
 function getClassDiscountPercent(){ const d=db.classDiscount||{}; return Number(d.until||0)>Date.now()?Math.max(0,Math.min(90,Number(d.percent||0))):0; }
-function getClassPrice(classe){ const pct=getClassDiscountPercent(); return Math.max(0,Math.floor(Number(classe?.price||0)*(1-pct/100))); }
+function getClassPrice(classe,user=null){ const pct=Math.max(getClassDiscountPercent(),getPersonalDiscountPercent(user)); return Math.max(0,Math.floor(Number(classe?.price||0)*(1-pct/100))); }
 function getPublicClasses(){ return CLASSES.filter(c=>c.id!=="pumpkin1" || getHalloweenStatus().active); }
 function releaseV26(){ db.v26Release={active:true,version:26,updatedAt:Date.now()}; saveDatabase(); const payload={...db.v26Release}; io.emit("v26Released",payload); return payload; }
 function setClassDiscount(percent,durationMinutes){ const pct=Math.max(0,Math.min(90,Number(percent||0))); db.classDiscount=pct?{percent:pct,until:Date.now()+Math.max(1,Math.min(1440,Number(durationMinutes||10)))*60000}:{percent:0,until:0}; saveDatabase(); const out={percent:getClassDiscountPercent(),until:db.classDiscount.until}; io.emit("classDiscountUpdated",out); return out; }
+function getPersonalEventDefinitions(){ return [
+  {id:"halloween",name:"🎃 Halloween",description:"Événement Halloween individuel."},
+  {id:"bloodmoon",name:"🌕 Lune de Sang",description:"Événement Lune de Sang individuel."},
+  {id:"double_coins",name:"🪙 x2 Pièces",description:"Double les pièces gagnées pendant 10 minutes."},
+  {id:"double_xp",name:"✨ x2 XP",description:"Double l'XP gagnée pendant 10 minutes."},
+  {id:"double_trophies",name:"🏆 x2 Trophées",description:"Double les trophées gagnés pendant 10 minutes."},
+  {id:"discount_10",name:"🎟️ Réduction classes -10%",description:"Réduction personnelle de 10% sur les classes."},
+  {id:"discount_25",name:"🎟️ Réduction classes -25%",description:"Réduction personnelle de 25% sur les classes."},
+  {id:"discount_50",name:"🎟️ Réduction classes -50%",description:"Réduction personnelle de 50% sur les classes."},
+  {id:"discount_75",name:"🎟️ Réduction classes -75%",description:"Réduction personnelle de 75% sur les classes."}
+]; }
+function ensurePersonalEvents(user){
+  ensureUserState(user);
+  user.personalEvents = user.personalEvents && typeof user.personalEvents === "object" ? user.personalEvents : {};
+  const now=Date.now();
+  Object.keys(user.personalEvents).forEach(id=>{ if(Number(user.personalEvents[id]?.until||0)<=now) delete user.personalEvents[id]; });
+  return user.personalEvents;
+}
+function getPersonalEvent(user,id){
+  if(!user)return null;
+  const ev=ensurePersonalEvents(user)[id];
+  if(!ev || Number(ev.until||0)<=Date.now()) return null;
+  return ev;
+}
+function getActivePersonalMultiplier(user,type){
+  const map={coins:"double_coins",xp:"double_xp",trophies:"double_trophies"};
+  const ev=getPersonalEvent(user,map[type]);
+  return ev?2:1;
+}
+function getPersonalDiscountPercent(user){
+  const events=ensurePersonalEvents(user), now=Date.now();
+  const vals=[75,50,25,10].filter(p=>{const ev=events[`discount_${p}`];return ev&&Number(ev.until||0)>now;});
+  return vals.length?vals[0]:0;
+}
+function publicPersonalEvents(user){
+  const events=ensurePersonalEvents(user), defs=getPersonalEventDefinitions(), now=Date.now();
+  return defs.map(d=>{const ev=events[d.id]; return ev&&Number(ev.until||0)>now?{...d,until:Number(ev.until)}:null;}).filter(Boolean);
+}
 
 function normalizeLoadedUsers() {
   db.globalBoosts = db.globalBoosts || {};
@@ -298,7 +338,8 @@ function publicUser(user) {
   } = user;
 
   // Les bonbons sont une monnaie temporaire : ils ne sont jamais exposés hors Halloween.
-  if (!getHalloweenStatusForPublic()) safeUser.halloweenCandy = 0;
+  if (!getHalloweenStatusForPublic() && !getPersonalEvent(user,"halloween")) safeUser.halloweenCandy = 0;
+  safeUser.personalEvents = publicPersonalEvents(user);
   return safeUser;
 }
 
@@ -796,6 +837,7 @@ function ensureUserState(user) {
   user.boosts.double_xp_until = Number(user.boosts.double_xp_until || 0);
   user.boosts.double_trophies_until = Number(user.boosts.double_trophies_until || 0);
   user.halloweenCandy = Math.max(0, Number(user.halloweenCandy || 0));
+  user.personalEvents = user.personalEvents && typeof user.personalEvents === "object" ? user.personalEvents : {};
 }
 function getRankedSeasonKey(date=new Date()) {
   const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit"}).formatToParts(date);
@@ -1173,9 +1215,9 @@ function finishGame(room) {
     if(Number(user.boosts.double_trophies_until||0)>nowBoost) trophies*=2;
 
     // Bonus globaux activés depuis le panneau Admin.
-    coins *= getActiveGlobalMultiplier("coins");
-    xp *= getActiveGlobalMultiplier("xp");
-    trophies *= getActiveGlobalMultiplier("trophies");
+    coins *= getActiveGlobalMultiplier("coins") * getActivePersonalMultiplier(user,"coins");
+    xp *= getActiveGlobalMultiplier("xp") * getActivePersonalMultiplier(user,"xp");
+    trophies *= getActiveGlobalMultiplier("trophies") * getActivePersonalMultiplier(user,"trophies");
 
     applyReward(user,{xp,coins,trophies});
     const candyEarned = awardHalloweenCandy(user, won ? 25 : 10);
@@ -1504,7 +1546,7 @@ app.post(
    API : CLASSES
 ========================================= */
 
-app.get("/api/classes",(req,res)=>res.json({classes:getPublicClasses().map(c=>({...c,originalPrice:c.price,effectivePrice:getClassPrice(c)})),discountPercent:getClassDiscountPercent(),discountUntil:Number(db.classDiscount?.until||0)}));
+app.get("/api/classes",(req,res)=>{ const user=findUser(req.query.pseudo||""); const personalDiscount=getPersonalDiscountPercent(user); res.json({classes:getPublicClasses().map(c=>({...c,originalPrice:c.price,effectivePrice:getClassPrice(c,user)})),discountPercent:Math.max(getClassDiscountPercent(),personalDiscount),discountUntil:Number(db.classDiscount?.until||0),personalDiscount}); });
 
 app.post(
   "/api/classes/buy",
@@ -1557,7 +1599,7 @@ app.post(
         });
     }
 
-    const price=getClassPrice(classe);
+    const price=getClassPrice(classe,user);
     if (
       Number(user.coins || 0) <
       price
@@ -1938,6 +1980,7 @@ app.post(
       coins,
       xp,
       trophies,
+      halloweenCandy,
       classId
     } = req.body;
 
@@ -2034,6 +2077,28 @@ app.post(
     });
   }
 );
+
+
+app.get("/api/admin/personal-events",(req,res)=>{
+  if(normalizePseudo(req.query.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
+  res.json({events:getPersonalEventDefinitions(),durationMinutes:10});
+});
+
+app.post("/api/admin/personal-event",(req,res)=>{
+  if(normalizePseudo(req.body.adminPseudo)!==ADMIN_PSEUDO)return res.status(403).json({message:"Accès refusé."});
+  const target=findUser(req.body.targetPseudo);
+  if(!target)return res.status(404).json({message:"Joueur introuvable."});
+  const eventId=String(req.body.eventId||"");
+  const definition=getPersonalEventDefinitions().find(e=>e.id===eventId);
+  if(!definition)return res.status(400).json({message:"Événement invalide."});
+  ensurePersonalEvents(target);
+  const until=Date.now()+10*60*1000;
+  target.personalEvents[eventId]={until};
+  addNotification(target.pseudo,{title:"⚡ Événement offert par le créateur",message:`Le créateur du jeu vous a offert ${definition.name} pendant 10 minutes !`,type:"creatorEvent"});
+  saveDatabase();
+  emitProfile(target);
+  res.json({message:`${definition.name} offert à ${target.pseudo} pendant 10 minutes.`,event:{...definition,until},user:publicUser(target)});
+});
 
 
 /* =========================================

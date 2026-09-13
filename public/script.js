@@ -459,6 +459,17 @@ function updateProfile() {
     boostBox.classList.toggle("hidden",active.length===0);
   }
 
+  const personalBox=$("activePersonalEvents");
+  if(personalBox){
+    const events=Array.isArray(currentUser.personalEvents)?currentUser.personalEvents:[];
+    const now=Date.now();
+    const activePersonal=events.filter(e=>Number(e.until||0)>now);
+    personalBox.innerHTML=activePersonal.map(e=>`<span class="boost-badge personal-event-badge">${esc(e.name)} — ${Math.ceil((Number(e.until)-now)/60000)} min</span>`).join("");
+    personalBox.classList.toggle("hidden",activePersonal.length===0);
+  }
+
+  syncHalloweenCandy(halloweenActive || hasPersonalEvent("halloween"));
+  syncHalloweenMusic(halloweenActive || hasPersonalEvent("halloween"));
   updateXpBar();
 }
 
@@ -543,7 +554,7 @@ async function loadClasses() {
 
   try {
     const response =
-      await fetch("/api/classes");
+      await fetch("/api/classes?pseudo="+encodeURIComponent(currentUser?.pseudo||""));
 
     const data =
       await response.json();
@@ -2377,6 +2388,20 @@ socket.on("voteError",data=>{alert("🗳️ "+(data?.message||"Vote refusé."));
 
 $("adminRewardAllButton")?.addEventListener("click",async()=>{if(!isAdmin())return;try{const d=await apiJson("/api/admin/reward-all-now",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,coins:Number($("adminAllCoins")?.value||0),xp:Number($("adminAllXp")?.value||0),trophies:Number($("adminAllTrophies")?.value||0),classId:$("adminAllClassSelect")?.value||"",onlineOnly:Boolean($("adminOnlineOnly")?.checked)})});$("adminAllMessage").textContent="✅ "+d.message;loadAdminV8();}catch(e){$("adminAllMessage").textContent="❌ "+e.message;}});
 
+$("adminGivePersonalEventButton")?.addEventListener("click",async()=>{
+  if(!isAdmin())return;
+  const msg=$("adminPersonalEventMessage");
+  if(!selectedAdminUser){if(msg)msg.textContent="❌ Recherche d'abord un joueur.";return;}
+  const eventId=$("adminPersonalEventSelect")?.value||"";
+  if(!eventId){if(msg)msg.textContent="❌ Choisis un événement.";return;}
+  if(msg)msg.textContent="⏳ Activation...";
+  try{
+    const d=await apiJson("/api/admin/personal-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adminPseudo:currentUser.pseudo,targetPseudo:selectedAdminUser.pseudo,eventId})});
+    if(msg)msg.textContent="✅ "+d.message;
+    selectedAdminUser=d.user;
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+});
+
 /* Récompense individuelle : trophées */
 // Le bouton de récompense individuelle est géré par le listener principal ci-dessus.
 
@@ -2558,12 +2583,14 @@ function syncHalloweenCandy(active){
   }
 }
 
+function hasPersonalEvent(id){return Array.isArray(currentUser?.personalEvents)&&currentUser.personalEvents.some(e=>e.id===id&&Number(e.until||0)>Date.now());}
+
 function syncHalloweenMusic(active){
   const box=$("halloweenMusicBox"), audio=$("halloweenMusic"), btn=$("halloweenMusicToggle");
   if(!box||!audio)return;
   box.classList.toggle("hidden",!active);
   if(!active){ audio.pause(); audio.currentTime=0; if(btn)btn.textContent="🎃 Musique Halloween : activée"; return; }
-  const tryPlay=()=>{ if(!halloweenActive)return; audio.volume=0.28; audio.play().catch(()=>{}); };
+  const tryPlay=()=>{ if(!halloweenActive && !hasPersonalEvent("halloween"))return; audio.volume=0.28; audio.play().catch(()=>{}); };
   tryPlay();
   if(!box.dataset.unlockBound){
     box.dataset.unlockBound="1";
@@ -2649,3 +2676,4 @@ socket.on("nightStarted",d=>renderGamePhaseV19("night",d));
 socket.on("nightStepStarted",d=>renderGamePhaseV19("night",d));
 socket.on("dayStarted",d=>renderGamePhaseV19("day",d));
 socket.on("voteUpdate",d=>{const x=$("gameTimer");if(x&&d?.required)x.textContent=`🗳️ ${d.count}/${d.required} votes enregistrés`;});
+setInterval(()=>{ if(currentUser) updateProfile(); },15000);
